@@ -1,3 +1,2 @@
 # Link - Painp0int App
-
-painp0int.vercel.app
+https://painp0int.vercel.app/
