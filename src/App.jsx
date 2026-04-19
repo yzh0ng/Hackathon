@@ -1,1268 +1,2547 @@
-import React, { useState, useMemo, useEffect } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 
 // ============================================================================
-// MOCK DATA
+// ClearPain — a calm pain tracking app
 // ============================================================================
 
-const INSURANCE_PLANS = {
-  "BCBS-PPO": {
-    name: "BCBS PPO Silver", provider: "BCBS", type: "PPO",
-    deductible: 1500, pcpCopay: 25, specialistCopay: 45, requiresReferral: true,
-    nutritionist: { covered: true, visits: 3, cost: 0 },
-    medications: { metformin: { covered: true, cost: 4, tier: "generic" } },
-    warnings: ["Specialist visits require PCP referral first"],
-  },
-  "Aetna-HMO": {
-    name: "Aetna HMO Bronze", provider: "Aetna", type: "HMO",
-    deductible: 3000, pcpCopay: 30, specialistCopay: 60, requiresReferral: true,
-    nutritionist: { covered: false, visits: 0, cost: null },
-    medications: { metformin: { covered: true, cost: 10, tier: "generic" } },
-    warnings: [
-      "HMO requires referral for all specialist visits",
-      "Out-of-network care not covered except emergencies",
-    ],
-  },
-  "United-EPO": {
-    name: "United EPO Gold", provider: "United", type: "EPO",
-    deductible: 500, pcpCopay: 20, specialistCopay: 35, requiresReferral: false,
-    nutritionist: { covered: true, visits: 6, cost: 0 },
-    medications: { metformin: { covered: true, cost: 4, tier: "generic" } },
-    warnings: ["Must stay in-network — out-of-network not covered"],
-  },
+const STORAGE_KEY = "clearpain_entries";
+
+const PAIN_TYPES = ["sharp", "dull", "aching", "burning", "throbbing", "tingling"];
+const DEFAULT_TRIGGERS = [
+  "waking up",
+  "walking",
+  "sitting",
+  "after eating",
+  "stress",
+  "weather",
+  "exercise",
+  "no clear trigger",
+];
+
+const REGION_LABELS = {
+  head: "head",
+  left_shoulder: "left shoulder",
+  right_shoulder: "right shoulder",
+  chest: "chest",
+  upper_back: "upper back",
+  abdomen: "abdomen",
+  lower_back: "lower back",
+  left_arm: "left arm",
+  right_arm: "right arm",
+  left_hip: "left hip",
+  right_hip: "right hip",
+  left_knee: "left knee",
+  right_knee: "right knee",
+  left_foot: "left foot",
+  right_foot: "right foot",
 };
 
-const DOCTORS_78701 = {
-  endocrinologist: [
-    { name: "Dr. Sarah Chen", distance: 0.8, accepting: true, address: "1201 W 38th St, Austin" },
-    { name: "Dr. Marcus Webb", distance: 1.2, accepting: false, address: "800 W 34th St, Austin" },
-    { name: "Dr. Priya Nair", distance: 2.1, accepting: true, address: "3810 Medical Pkwy, Austin" },
-  ],
-  pcp: [
-    { name: "Dr. James Oduya", distance: 0.6, accepting: true, address: "1111 W 6th St, Austin" },
-    { name: "Dr. Emily Foster", distance: 1.4, accepting: true, address: "2500 W Cesar Chavez, Austin" },
-    { name: "Dr. Ravi Patel", distance: 2.3, accepting: false, address: "4301 S Congress Ave, Austin" },
-  ],
-  cardiologist: [
-    { name: "Dr. Helen Park", distance: 0.9, accepting: true, address: "1401 W 12th St, Austin" },
-    { name: "Dr. Thomas Reid", distance: 1.7, accepting: true, address: "3000 N Lamar, Austin" },
-    { name: "Dr. Lisa Ahmadi", distance: 2.5, accepting: false, address: "4900 Mueller Blvd, Austin" },
-  ],
-};
+// Regions available per body view
+const FRONT_REGIONS = [
+  "head",
+  "left_shoulder",
+  "right_shoulder",
+  "chest",
+  "abdomen",
+  "left_arm",
+  "right_arm",
+  "left_hip",
+  "right_hip",
+  "left_knee",
+  "right_knee",
+  "left_foot",
+  "right_foot",
+];
 
-const PHARMACIES = [
-  { name: "HEB Pharmacy", price: 4, note: null },
-  { name: "Costco Pharmacy", price: 4, note: "Membership required ($60/yr)" },
-  { name: "CVS", price: 9, note: "GoodRx coupon brings to $4" },
-  { name: "Walgreens", price: 9, note: null },
+const BACK_REGIONS = [
+  "head",
+  "left_shoulder",
+  "right_shoulder",
+  "upper_back",
+  "lower_back",
+  "left_arm",
+  "right_arm",
+  "left_hip",
+  "right_hip",
+  "left_knee",
+  "right_knee",
+  "left_foot",
+  "right_foot",
 ];
 
 // ============================================================================
-// ICONS
+// Sample data seeding — 21 days of realistic varied entries
 // ============================================================================
 
-const Icon = ({ path, size = 20, className = "", style }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
-       strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={className} style={style}>
-    {path}
-  </svg>
-);
+function seedSampleData() {
+  const now = Date.now();
+  const DAY = 24 * 60 * 60 * 1000;
+  const entries = [];
 
-const icons = {
-  shield: <><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></>,
-  user: <><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></>,
-  arrowRight: <><path d="M5 12h14M13 5l7 7-7 7"/></>,
-  arrowLeft: <><path d="M19 12H5M11 19l-7-7 7-7"/></>,
-  check: <><path d="M20 6L9 17l-5-5"/></>,
-  alert: <><path d="M10.3 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><path d="M12 9v4M12 17h.01"/></>,
-  x: <><path d="M18 6L6 18M6 6l12 12"/></>,
-  pin: <><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/><circle cx="12" cy="10" r="3"/></>,
-  pill: <><path d="M10.5 20.5a7.07 7.07 0 01-10-10l10-10a7.07 7.07 0 0110 10l-10 10z"/><path d="M8.5 8.5l7 7"/></>,
-  leaf: <><path d="M11 20A7 7 0 014 13V5a2 2 0 012-2h5a7 7 0 017 7v8a2 2 0 01-2 2h-5z"/><path d="M4 13s4-1 7 2 7 2 7 2"/></>,
-  copy: <><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></>,
-  refresh: <><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></>,
-  stethoscope: <><path d="M4.8 2.3A.3.3 0 105 2H4a2 2 0 00-2 2v5a6 6 0 006 6v0a6 6 0 006-6V4a2 2 0 00-2-2h-1a.2.2 0 10.2.3"/><path d="M8 15v1a6 6 0 006 6v0a6 6 0 006-6v-4"/><circle cx="20" cy="10" r="2"/></>,
-  beaker: <><path d="M4.5 3h15M6 3v16a2 2 0 002 2h8a2 2 0 002-2V3M6 14h12"/></>,
-  sparkle: <><path d="M12 3l2 5 5 2-5 2-2 5-2-5-5-2 5-2 2-5z"/></>,
-  home: <><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><path d="M9 22V12h6v10"/></>,
-  clipboard: <><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 012 2v14a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2h2"/></>,
-  compass: <><circle cx="12" cy="12" r="10"/><path d="M16 8l-2 6-6 2 2-6 6-2z"/></>,
-  map: <><path d="M1 6v16l7-4 8 4 7-4V2l-7 4-8-4-7 4z"/><path d="M8 2v16M16 6v16"/></>,
-  menu: <><path d="M3 12h18M3 6h18M3 18h18"/></>,
-  lock: <><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></>,
-};
+  const regions = ["lower_back", "left_hip", "right_knee", "abdomen"];
+  const triggers = DEFAULT_TRIGGERS;
+  const types = PAIN_TYPES;
 
-// ============================================================================
-// DIAGNOSIS HEURISTIC + AI CALL
-// ============================================================================
+  // Generate 35-40 entries over last 21 days
+  const count = 38;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const todayStart = today.getTime();
 
-function inferConditionOffline(text) {
-  const t = text.toLowerCase();
-  if (/diabet|a1c|blood sugar|glucose|insulin|metformin|type 2|type ii/.test(t)) {
-    return {
-      condition_name: "Type 2 Diabetes",
-      plain_english_summary: "Your body isn't using insulin effectively, which lets blood sugar run high. It's a manageable condition — most people keep it under control with medication, a few lifestyle adjustments, and regular check-ins with a care team.",
-      required_specialists: ["Endocrinologist", "Registered Dietitian", "Ophthalmologist (annual eye exam)"],
-      required_labs: ["HbA1c (every 3 months at first)", "Fasting glucose panel", "Lipid panel", "Kidney function (eGFR, urine microalbumin)"],
-      typical_medications: ["Metformin (first-line)", "GLP-1 agonist (if needed)", "Statin (if cholesterol high)"],
-      visit_frequency: "Endocrinologist every 3 months until stable, then every 6 months",
-      lifestyle_note: "Walk 30 minutes most days, cut added sugar and refined carbs, and aim for 7+ hours of sleep. Small steady changes beat big short-lived ones.",
-    };
-  }
-  if (/thyroid|hashimoto|hypothyroid|hyperthyroid|tsh/.test(t)) {
-    return {
-      condition_name: "Thyroid Disorder",
-      plain_english_summary: "Your thyroid gland is over- or under-producing hormones that regulate your metabolism. This is very common and highly treatable — most people feel significantly better within weeks of starting the right medication.",
-      required_specialists: ["Endocrinologist"],
-      required_labs: ["TSH", "Free T4", "Free T3", "Thyroid antibodies (TPO, TgAb)"],
-      typical_medications: ["Levothyroxine (for hypothyroid)", "Methimazole (for hyperthyroid)"],
-      visit_frequency: "Every 6–8 weeks until dose is stable, then every 6–12 months",
-      lifestyle_note: "Take medication on an empty stomach, wait 30–60 minutes before eating or drinking anything but water, and separate from calcium or iron supplements by 4 hours.",
-    };
-  }
-  if (/blood pressure|hypertension|htn/.test(t)) {
-    return {
-      condition_name: "Hypertension",
-      plain_english_summary: "Your blood pressure is consistently above the healthy range, which over time can strain your heart and blood vessels. The good news: it responds well to lifestyle changes and medication, and many people bring it down within a few months.",
-      required_specialists: ["Cardiologist", "Registered Dietitian"],
-      required_labs: ["Basic metabolic panel", "Lipid panel", "Urinalysis", "EKG"],
-      typical_medications: ["Lisinopril", "Amlodipine", "Hydrochlorothiazide"],
-      visit_frequency: "Every 4 weeks until controlled, then every 3–6 months",
-      lifestyle_note: "Cut sodium to under 2,300 mg/day, move daily, limit alcohol, and monitor at home with a cuff — morning and evening readings for two weeks give your doctor real data.",
-    };
-  }
-  return {
-    condition_name: "Clinical Evaluation Needed",
-    plain_english_summary: "Based on what you described, a clinician should evaluate you in person to confirm what's going on and rule out anything that needs faster attention. This is a starting plan — your doctor may adjust it.",
-    required_specialists: ["Primary Care Physician"],
-    required_labs: ["Complete Blood Count (CBC)", "Comprehensive Metabolic Panel (CMP)"],
-    typical_medications: [],
-    visit_frequency: "Initial visit within 1–2 weeks",
-    lifestyle_note: "Write down when symptoms started, how often they happen, and what makes them better or worse. That history is the single most useful thing you can bring to an appointment.",
-  };
-}
+  for (let i = 0; i < count; i++) {
+    // Distribute across 21 days, weighted toward recent
+    const dayOffset = Math.floor(Math.random() * 21);
+    const hourOffset = 6 + Math.floor(Math.random() * 16); // 6am-10pm
+    const minuteOffset = Math.floor(Math.random() * 60);
+    // Anchor to start of day N days ago, then add hour/minute
+    let timestamp =
+      todayStart - dayOffset * DAY + hourOffset * 60 * 60 * 1000 + minuteOffset * 60 * 1000;
+    // Guard: never in the future
+    if (timestamp > now) timestamp = now - Math.floor(Math.random() * 3600000);
 
-async function callAnthropicAPI(userInput, conditionStatus) {
-  const systemPrompt = `You are a clinical care navigator. The user has given you a diagnosis or symptoms. Return ONLY a JSON object with these fields: condition_name (string), plain_english_summary (2-3 sentences, no jargon), required_specialists (array of strings), required_labs (array of strings), typical_medications (array of strings), visit_frequency (string), lifestyle_note (string). Return nothing except valid JSON.`;
-  try {
-    const response = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: "claude-sonnet-4-20250514", max_tokens: 1000, system: systemPrompt,
-        messages: [{ role: "user", content: `Patient input: "${userInput}"\nStatus: ${conditionStatus}\n\nReturn ONLY the JSON object, no markdown, no code fences.` }],
-      }),
+    // Recent entries trend higher intensity (upward trend over last week)
+    let baseIntensity;
+    if (dayOffset <= 6) {
+      baseIntensity = 5 + Math.floor(Math.random() * 4); // 5-8
+    } else if (dayOffset <= 13) {
+      baseIntensity = 4 + Math.floor(Math.random() * 3); // 4-6
+    } else {
+      baseIntensity = 3 + Math.floor(Math.random() * 3); // 3-5
+    }
+
+    // Lower back is most common
+    let region;
+    const r = Math.random();
+    if (r < 0.45) region = "lower_back";
+    else if (r < 0.7) region = "left_hip";
+    else if (r < 0.88) region = "right_knee";
+    else region = "abdomen";
+
+    // Waking up is the most common trigger
+    let trigger;
+    const t = Math.random();
+    if (t < 0.35) trigger = "waking up";
+    else if (t < 0.55) trigger = "sitting";
+    else if (t < 0.72) trigger = "stress";
+    else trigger = triggers[Math.floor(Math.random() * triggers.length)];
+
+    entries.push({
+      id: `seed_${i}_${timestamp}`,
+      region,
+      painType: types[Math.floor(Math.random() * types.length)],
+      intensity: baseIntensity,
+      trigger,
+      note: "",
+      timestamp,
     });
-    if (!response.ok) throw new Error("API error");
-    const data = await response.json();
-    const textBlock = data.content.find((b) => b.type === "text");
-    if (!textBlock) throw new Error("No text in response");
-    return JSON.parse(textBlock.text.replace(/```json|```/g, "").trim());
-  } catch (err) {
-    console.warn("Falling back to offline inference:", err);
-    return inferConditionOffline(userInput);
   }
+
+  // Ensure "aching" is most common pain type
+  entries.forEach((e, idx) => {
+    if (idx % 3 === 0) e.painType = "aching";
+  });
+
+  entries.sort((a, b) => b.timestamp - a.timestamp);
+  return entries;
 }
 
 // ============================================================================
-// PRIMITIVES
+// Utility functions
 // ============================================================================
 
-const Card = ({ children, className = "" }) => (
-  <div className={`bg-white rounded-2xl border border-stone-200/80 ${className}`}
-       style={{ boxShadow: "0 1px 2px rgba(27,43,75,0.04), 0 8px 24px -12px rgba(27,43,75,0.08)" }}>
-    {children}
-  </div>
-);
+function greeting() {
+  const h = new Date().getHours();
+  if (h < 12) return "good morning";
+  if (h < 18) return "good afternoon";
+  return "good evening";
+}
 
-const SectionLabel = ({ children }) => (
-  <div className="text-[11px] uppercase tracking-[0.14em] font-semibold"
-       style={{ color: "#5A6B8C", fontFamily: "'Inter', system-ui, sans-serif" }}>
-    {children}
-  </div>
-);
+function formatDate(ts) {
+  const d = new Date(ts);
+  return d.toLocaleDateString("en-US", {
+    weekday: "long",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
 
-const Heading = ({ level = 2, children, className = "" }) => {
-  const sizes = {
-    1: "text-[28px] leading-[1.15] md:text-[34px]",
-    2: "text-[22px] leading-[1.2] md:text-[26px]",
-    3: "text-[17px] leading-[1.3] md:text-[18px]",
+function formatDateShort(ts) {
+  const d = new Date(ts);
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+function formatDateLong(ts) {
+  const d = new Date(ts);
+  return d.toLocaleDateString("en-US", {
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
+function dateKey(ts) {
+  const d = new Date(ts);
+  return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+}
+
+function timeAgo(ts) {
+  const diff = Date.now() - ts;
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days}d ago`;
+  return formatDateShort(ts);
+}
+
+function intensityColor(n) {
+  if (n <= 3) return "#7BAE8F"; // sage
+  if (n <= 6) return "#D4A843"; // amber
+  return "#E8735A"; // coral
+}
+
+function dayHeader(ts) {
+  const d = new Date(ts);
+  const now = new Date();
+  const yesterday = new Date();
+  yesterday.setDate(now.getDate() - 1);
+  if (dateKey(ts) === dateKey(now.getTime())) return "today";
+  if (dateKey(ts) === dateKey(yesterday.getTime())) return "yesterday";
+  return d
+    .toLocaleDateString("en-US", {
+      weekday: "long",
+      month: "short",
+      day: "numeric",
+    })
+    .toLowerCase();
+}
+
+// ============================================================================
+// Body SVG — gentle, rounded, warm
+// ============================================================================
+
+function BodyFront({ onRegionTap, pulseRegion, heatmap }) {
+  const skin = "#F4CDA4";
+  const skinShade = "#E8B88A";
+  const skinLight = "#F9DCBA";
+  const stroke = "#B8794A";
+  const strokeLight = "#D4956A";
+  const hair = "#4A3828";
+  const hairHighlight = "#5E4734";
+  const lip = "#C87060";
+  const sw = 1.0;
+
+  const heatFill = (region) => {
+    if (!heatmap) return "transparent";
+    const count = heatmap[region] || 0;
+    if (count === 0) return "transparent";
+    const max = Math.max(...Object.values(heatmap), 1);
+    const intensity = count / max;
+    if (intensity < 0.34) return `rgba(123, 174, 143, ${0.3 + intensity * 0.4})`;
+    if (intensity < 0.67) return `rgba(212, 168, 67, ${0.4 + intensity * 0.4})`;
+    return `rgba(232, 115, 90, ${0.45 + intensity * 0.45})`;
   };
-  const Tag = `h${level}`;
+
   return (
-    <Tag className={`${sizes[level]} ${className}`}
-         style={{ fontFamily: "'Fraunces', Georgia, serif", color: "#1B2B4B", fontWeight: 500, letterSpacing: "-0.01em" }}>
-      {children}
-    </Tag>
-  );
-};
+    <svg viewBox="0 0 200 500" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet" style={{ width: "100%", height: "100%", display: "block" }}>
+      <defs>
+        <linearGradient id="torsoShade" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0%" stopColor={skinLight} />
+          <stop offset="50%" stopColor={skin} />
+          <stop offset="100%" stopColor={skinShade} />
+        </linearGradient>
+        <linearGradient id="limbShade" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0%" stopColor={skinLight} />
+          <stop offset="100%" stopColor={skinShade} />
+        </linearGradient>
+      </defs>
 
-const Button = ({ children, onClick, variant = "primary", disabled, className = "", type = "button" }) => {
-  const base = "inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl font-medium text-[15px] transition-all duration-150 disabled:opacity-40 disabled:cursor-not-allowed";
-  const styles = {
-    primary: "text-white hover:brightness-110 active:brightness-95",
-    secondary: "bg-white border border-stone-300 text-[#1B2B4B] hover:bg-stone-50",
-    ghost: "text-[#1B2B4B] hover:bg-stone-100",
-  };
-  const inline = variant === "primary" ? { backgroundColor: "#0D9488" } : {};
-  return (
-    <button type={type} onClick={onClick} disabled={disabled} className={`${base} ${styles[variant]} ${className}`} style={inline}>
-      {children}
-    </button>
-  );
-};
+      {/* ============ HEAD ============ */}
+      {/* Hair back (behind head) */}
+      <path
+        d="M 78 38 Q 75 22 90 16 Q 100 12 110 16 Q 125 22 122 38 L 122 48 Q 120 52 118 50 L 82 50 Q 80 52 78 48 Z"
+        fill={hair}
+        stroke={stroke}
+        strokeWidth={sw * 0.8}
+      />
+      {/* Face/head */}
+      <path
+        d="M 82 38 Q 82 26 100 24 Q 118 26 118 38 L 118 52 Q 118 64 114 68 Q 110 72 100 72 Q 90 72 86 68 Q 82 64 82 52 Z"
+        fill={skin}
+        stroke={stroke}
+        strokeWidth={sw}
+      />
+      {/* Subtle face shading (right side slightly darker) */}
+      <path
+        d="M 108 30 Q 118 32 118 48 Q 118 62 114 67 Q 111 70 107 70 Q 111 64 112 52 Q 112 38 108 30 Z"
+        fill={skinShade}
+        opacity="0.35"
+      />
+      {/* Hair bangs (on top of face) */}
+      <path
+        d="M 82 32 Q 84 20 100 18 Q 116 20 118 32 Q 116 28 108 30 Q 100 32 92 30 Q 86 30 82 32 Z"
+        fill={hair}
+      />
+      <path
+        d="M 90 22 Q 95 18 102 20"
+        stroke={hairHighlight}
+        strokeWidth="0.6"
+        fill="none"
+        opacity="0.5"
+      />
+      {/* Ears */}
+      <ellipse cx="80" cy="47" rx="2.5" ry="4.5" fill={skinShade} stroke={stroke} strokeWidth={sw * 0.7} />
+      <ellipse cx="120" cy="47" rx="2.5" ry="4.5" fill={skinShade} stroke={stroke} strokeWidth={sw * 0.7} />
 
-const Field = ({ label, children, hint }) => (
-  <label className="block">
-    <div className="mb-2"><SectionLabel>{label}</SectionLabel></div>
-    {children}
-    {hint && <div className="mt-1.5 text-[13px] text-stone-500">{hint}</div>}
-  </label>
-);
+      {/* Eyebrows */}
+      <path d="M 89 42 Q 93 40 96 42" stroke={hair} strokeWidth="1.4" fill="none" strokeLinecap="round" />
+      <path d="M 104 42 Q 107 40 111 42" stroke={hair} strokeWidth="1.4" fill="none" strokeLinecap="round" />
 
-const Input = ({ ...props }) => (
-  <input {...props} className="w-full px-4 py-3 rounded-xl border border-stone-300 bg-white text-[15px] text-[#1B2B4B] placeholder:text-stone-400 focus:outline-none focus:border-[#0D9488] focus:ring-2 focus:ring-[#0D9488]/15 transition" />
-);
+      {/* Eyes */}
+      <ellipse cx="92.5" cy="47" rx="1.8" ry="1.4" fill="#2C2418" />
+      <ellipse cx="107.5" cy="47" rx="1.8" ry="1.4" fill="#2C2418" />
+      {/* Eye highlight */}
+      <circle cx="93" cy="46.5" r="0.4" fill="#FFFFFF" />
+      <circle cx="108" cy="46.5" r="0.4" fill="#FFFFFF" />
 
-const Select = ({ children, ...props }) => (
-  <div className="relative">
-    <select {...props} className="w-full appearance-none px-4 py-3 pr-10 rounded-xl border border-stone-300 bg-white text-[15px] text-[#1B2B4B] focus:outline-none focus:border-[#0D9488] focus:ring-2 focus:ring-[#0D9488]/15 transition">
-      {children}
-    </select>
-    <svg className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#1B2B4B" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M6 9l6 6 6-6" />
+      {/* Nose */}
+      <path d="M 100 50 L 98.5 57 Q 98.5 59 100 59 Q 101.5 59 101.5 57 Z" fill={skinShade} opacity="0.5" stroke={stroke} strokeWidth="0.5" strokeLinejoin="round" />
+
+      {/* Mouth */}
+      <path d="M 96 63 Q 100 65 104 63" stroke={lip} strokeWidth="1.2" fill="none" strokeLinecap="round" />
+
+      {/* Neck with shading */}
+      <path
+        d="M 93 70 L 92 82 Q 92 84 94 85 L 106 85 Q 108 84 108 82 L 107 70 Z"
+        fill={skin}
+        stroke={stroke}
+        strokeWidth={sw}
+      />
+      {/* Neck shadow under jaw */}
+      <path d="M 93 72 Q 100 76 107 72" stroke={stroke} strokeWidth="0.6" fill="none" opacity="0.5" />
+      {/* Collarbone hint */}
+      <path d="M 82 92 Q 100 96 118 92" stroke={stroke} strokeWidth="0.5" fill="none" opacity="0.4" />
+
+      {/* ============ TORSO ============ */}
+      {/* Shoulders are at ~y=88, torso narrows at waist y=215, hips flare slightly at y=260 */}
+      <path
+        d="M 94 85
+           Q 82 86 74 92
+           Q 66 96 64 106
+           L 61 125
+           Q 58 148 62 168
+           L 66 195
+           Q 68 210 70 220
+           Q 70 230 72 245
+           Q 74 258 80 268
+           Q 88 272 100 272
+           Q 112 272 120 268
+           Q 126 258 128 245
+           Q 130 230 130 220
+           Q 132 210 134 195
+           L 138 168
+           Q 142 148 139 125
+           L 136 106
+           Q 134 96 126 92
+           Q 118 86 106 85
+           Z"
+        fill="url(#torsoShade)"
+        stroke={stroke}
+        strokeWidth={sw}
+      />
+      {/* Shirt/body subtle midline (sternum hint) */}
+      <path d="M 100 96 L 100 210" stroke={stroke} strokeWidth="0.4" fill="none" opacity="0.2" strokeDasharray="1 2" />
+      {/* Chest shading — subtle pec hints */}
+      <path d="M 76 105 Q 85 115 92 118" stroke={stroke} strokeWidth="0.5" fill="none" opacity="0.25" />
+      <path d="M 124 105 Q 115 115 108 118" stroke={stroke} strokeWidth="0.5" fill="none" opacity="0.25" />
+      {/* Waist indent hint */}
+      <path d="M 70 210 Q 72 218 70 225" stroke={stroke} strokeWidth="0.4" fill="none" opacity="0.3" />
+      <path d="M 130 210 Q 128 218 130 225" stroke={stroke} strokeWidth="0.4" fill="none" opacity="0.3" />
+      {/* Navel hint */}
+      <ellipse cx="100" cy="195" rx="1.2" ry="2" fill={stroke} opacity="0.25" />
+
+      {/* ============ LEFT ARM (viewer's left) ============ */}
+      {/* Upper arm */}
+      <path
+        d="M 74 92
+           Q 62 96 58 108
+           Q 54 122 52 140
+           Q 51 154 53 162
+           L 55 164
+           Q 58 158 60 145
+           Q 63 125 68 108
+           Q 72 98 74 92 Z"
+        fill="url(#limbShade)"
+        stroke={stroke}
+        strokeWidth={sw}
+      />
+      {/* Elbow */}
+      <circle cx="53" cy="164" r="5.5" fill={skin} stroke={stroke} strokeWidth={sw} />
+      {/* Forearm */}
+      <path
+        d="M 48 164
+           Q 46 180 46 200
+           Q 46 218 48 232
+           Q 49 240 52 241
+           Q 56 242 57 236
+           Q 58 222 58 208
+           Q 58 188 58 168 Z"
+        fill="url(#limbShade)"
+        stroke={stroke}
+        strokeWidth={sw}
+      />
+      {/* Wrist */}
+      <path d="M 48 240 Q 52 242 57 240" stroke={stroke} strokeWidth="0.6" fill="none" opacity="0.5" />
+      {/* Hand */}
+      <path
+        d="M 48 240
+           Q 46 245 46 252
+           Q 46 260 50 262
+           Q 54 263 58 261
+           Q 60 258 60 250
+           Q 59 244 57 240 Z"
+        fill={skin}
+        stroke={stroke}
+        strokeWidth={sw}
+      />
+      {/* Finger hint */}
+      <path d="M 50 255 Q 52 260 56 258" stroke={stroke} strokeWidth="0.4" fill="none" opacity="0.4" />
+
+      {/* ============ RIGHT ARM ============ */}
+      <path
+        d="M 126 92
+           Q 138 96 142 108
+           Q 146 122 148 140
+           Q 149 154 147 162
+           L 145 164
+           Q 142 158 140 145
+           Q 137 125 132 108
+           Q 128 98 126 92 Z"
+        fill="url(#limbShade)"
+        stroke={stroke}
+        strokeWidth={sw}
+      />
+      <circle cx="147" cy="164" r="5.5" fill={skin} stroke={stroke} strokeWidth={sw} />
+      <path
+        d="M 152 164
+           Q 154 180 154 200
+           Q 154 218 152 232
+           Q 151 240 148 241
+           Q 144 242 143 236
+           Q 142 222 142 208
+           Q 142 188 142 168 Z"
+        fill="url(#limbShade)"
+        stroke={stroke}
+        strokeWidth={sw}
+      />
+      <path d="M 143 240 Q 148 242 152 240" stroke={stroke} strokeWidth="0.6" fill="none" opacity="0.5" />
+      <path
+        d="M 152 240
+           Q 154 245 154 252
+           Q 154 260 150 262
+           Q 146 263 142 261
+           Q 140 258 140 250
+           Q 141 244 143 240 Z"
+        fill={skin}
+        stroke={stroke}
+        strokeWidth={sw}
+      />
+      <path d="M 150 255 Q 148 260 144 258" stroke={stroke} strokeWidth="0.4" fill="none" opacity="0.4" />
+
+      {/* ============ LEFT LEG ============ */}
+      {/* Thigh */}
+      <path
+        d="M 80 268
+           Q 76 290 75 320
+           Q 75 345 77 360
+           L 82 362
+           Q 84 345 86 320
+           Q 88 295 90 272
+           Z"
+        fill="url(#limbShade)"
+        stroke={stroke}
+        strokeWidth={sw}
+      />
+      {/* Knee */}
+      <ellipse cx="80" cy="364" rx="7" ry="6" fill={skin} stroke={stroke} strokeWidth={sw} />
+      <path d="M 77 364 Q 80 368 83 364" stroke={stroke} strokeWidth="0.5" fill="none" opacity="0.4" />
+      {/* Calf/shin */}
+      <path
+        d="M 73 370
+           Q 72 400 74 430
+           Q 75 450 78 462
+           Q 80 470 84 470
+           Q 88 470 88 462
+           Q 88 450 88 430
+           Q 88 400 87 370
+           Z"
+        fill="url(#limbShade)"
+        stroke={stroke}
+        strokeWidth={sw}
+      />
+      {/* Ankle */}
+      <path d="M 76 466 Q 82 470 88 466" stroke={stroke} strokeWidth="0.5" fill="none" opacity="0.4" />
+      {/* Foot */}
+      <path
+        d="M 76 470
+           Q 72 474 72 480
+           Q 72 484 78 485
+           Q 86 485 92 482
+           Q 92 476 90 470 Z"
+        fill={skin}
+        stroke={stroke}
+        strokeWidth={sw}
+      />
+
+      {/* ============ RIGHT LEG ============ */}
+      <path
+        d="M 120 268
+           Q 124 290 125 320
+           Q 125 345 123 360
+           L 118 362
+           Q 116 345 114 320
+           Q 112 295 110 272
+           Z"
+        fill="url(#limbShade)"
+        stroke={stroke}
+        strokeWidth={sw}
+      />
+      <ellipse cx="120" cy="364" rx="7" ry="6" fill={skin} stroke={stroke} strokeWidth={sw} />
+      <path d="M 117 364 Q 120 368 123 364" stroke={stroke} strokeWidth="0.5" fill="none" opacity="0.4" />
+      <path
+        d="M 127 370
+           Q 128 400 126 430
+           Q 125 450 122 462
+           Q 120 470 116 470
+           Q 112 470 112 462
+           Q 112 450 112 430
+           Q 112 400 113 370
+           Z"
+        fill="url(#limbShade)"
+        stroke={stroke}
+        strokeWidth={sw}
+      />
+      <path d="M 112 466 Q 118 470 124 466" stroke={stroke} strokeWidth="0.5" fill="none" opacity="0.4" />
+      <path
+        d="M 124 470
+           Q 128 474 128 480
+           Q 128 484 122 485
+           Q 114 485 108 482
+           Q 108 476 110 470 Z"
+        fill={skin}
+        stroke={stroke}
+        strokeWidth={sw}
+      />
+
+      {/* ============ HEATMAP OVERLAYS ============ */}
+      <ellipse cx="100" cy="48" rx="18" ry="24" fill={heatFill("head")} pointerEvents="none" />
+      <circle cx="78" cy="95" r="11" fill={heatFill("left_shoulder")} pointerEvents="none" />
+      <circle cx="122" cy="95" r="11" fill={heatFill("right_shoulder")} pointerEvents="none" />
+      <ellipse cx="100" cy="135" rx="30" ry="26" fill={heatFill("chest")} pointerEvents="none" />
+      <ellipse cx="100" cy="200" rx="30" ry="30" fill={heatFill("abdomen")} pointerEvents="none" />
+      <ellipse cx="52" cy="175" rx="11" ry="35" fill={heatFill("left_arm")} pointerEvents="none" />
+      <ellipse cx="148" cy="175" rx="11" ry="35" fill={heatFill("right_arm")} pointerEvents="none" />
+      <circle cx="82" cy="262" r="12" fill={heatFill("left_hip")} pointerEvents="none" />
+      <circle cx="118" cy="262" r="12" fill={heatFill("right_hip")} pointerEvents="none" />
+      <circle cx="80" cy="364" r="13" fill={heatFill("left_knee")} pointerEvents="none" />
+      <circle cx="120" cy="364" r="13" fill={heatFill("right_knee")} pointerEvents="none" />
+      <ellipse cx="82" cy="478" rx="12" ry="8" fill={heatFill("left_foot")} pointerEvents="none" />
+      <ellipse cx="118" cy="478" rx="12" ry="8" fill={heatFill("right_foot")} pointerEvents="none" />
+
+      {/* ============ TAP ZONES ============ */}
+      {!heatmap && (
+        <g>
+          <ellipse cx="100" cy="45" rx="24" ry="32" fill="transparent" onClick={() => onRegionTap("head")} style={{ cursor: "pointer" }} />
+          <circle cx="78" cy="95" r="15" fill="transparent" onClick={() => onRegionTap("left_shoulder")} style={{ cursor: "pointer" }} />
+          <circle cx="122" cy="95" r="15" fill="transparent" onClick={() => onRegionTap("right_shoulder")} style={{ cursor: "pointer" }} />
+          <ellipse cx="100" cy="140" rx="32" ry="32" fill="transparent" onClick={() => onRegionTap("chest")} style={{ cursor: "pointer" }} />
+          <ellipse cx="100" cy="205" rx="32" ry="34" fill="transparent" onClick={() => onRegionTap("abdomen")} style={{ cursor: "pointer" }} />
+          <ellipse cx="52" cy="180" rx="16" ry="52" fill="transparent" onClick={() => onRegionTap("left_arm")} style={{ cursor: "pointer" }} />
+          <ellipse cx="148" cy="180" rx="16" ry="52" fill="transparent" onClick={() => onRegionTap("right_arm")} style={{ cursor: "pointer" }} />
+          <circle cx="82" cy="262" r="16" fill="transparent" onClick={() => onRegionTap("left_hip")} style={{ cursor: "pointer" }} />
+          <circle cx="118" cy="262" r="16" fill="transparent" onClick={() => onRegionTap("right_hip")} style={{ cursor: "pointer" }} />
+          <circle cx="80" cy="364" r="18" fill="transparent" onClick={() => onRegionTap("left_knee")} style={{ cursor: "pointer" }} />
+          <circle cx="120" cy="364" r="18" fill="transparent" onClick={() => onRegionTap("right_knee")} style={{ cursor: "pointer" }} />
+          <ellipse cx="82" cy="478" rx="14" ry="12" fill="transparent" onClick={() => onRegionTap("left_foot")} style={{ cursor: "pointer" }} />
+          <ellipse cx="118" cy="478" rx="14" ry="12" fill="transparent" onClick={() => onRegionTap("right_foot")} style={{ cursor: "pointer" }} />
+        </g>
+      )}
+
+      {pulseRegion && <PulseRing region={pulseRegion} view="front" />}
     </svg>
-  </div>
-);
-
-const Textarea = ({ ...props }) => (
-  <textarea {...props} className="w-full px-4 py-3 rounded-xl border border-stone-300 bg-white text-[15px] text-[#1B2B4B] placeholder:text-stone-400 focus:outline-none focus:border-[#0D9488] focus:ring-2 focus:ring-[#0D9488]/15 transition resize-none" />
-);
-
-const Banner = ({ tone = "info", title, children, icon }) => {
-  const palettes = {
-    warn: { bg: "#FEF7E7", border: "#F59E0B", text: "#7A4A00", icon: "#B37400" },
-    error: { bg: "#FEF1F1", border: "#EF4444", text: "#7A1515", icon: "#C32525" },
-    ok: { bg: "#ECFDF5", border: "#0D9488", text: "#064E3B", icon: "#0D9488" },
-    info: { bg: "#F1F5FA", border: "#5A6B8C", text: "#1B2B4B", icon: "#1B2B4B" },
-  };
-  const p = palettes[tone];
-  return (
-    <div className="flex gap-3 p-4 rounded-xl border-l-4" style={{ backgroundColor: p.bg, borderLeftColor: p.border }}>
-      {icon && <div style={{ color: p.icon, flexShrink: 0 }} className="pt-0.5">{icon}</div>}
-      <div>
-        {title && <div className="font-semibold text-[14px] mb-0.5" style={{ color: p.text }}>{title}</div>}
-        <div className="text-[14px] leading-relaxed" style={{ color: p.text }}>{children}</div>
-      </div>
-    </div>
   );
-};
+}
 
-const Badge = ({ children, tone = "neutral" }) => {
-  const palettes = {
-    ok: { bg: "#ECFDF5", text: "#065F46", border: "#A7F3D0" },
-    warn: { bg: "#FEF3C7", text: "#78350F", border: "#FDE68A" },
-    error: { bg: "#FEE2E2", text: "#7F1D1D", border: "#FECACA" },
-    neutral: { bg: "#F1F5FA", text: "#334155", border: "#E2E8F0" },
-  };
-  const p = palettes[tone];
-  return (
-    <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold tracking-wide" style={{ backgroundColor: p.bg, color: p.text, border: `1px solid ${p.border}` }}>
-      {children}
-    </span>
-  );
-};
+function BodyBack({ onRegionTap, pulseRegion, heatmap }) {
+  const skin = "#F4CDA4";
+  const skinShade = "#E8B88A";
+  const skinLight = "#F9DCBA";
+  const stroke = "#B8794A";
+  const hair = "#4A3828";
+  const hairHighlight = "#5E4734";
+  const sw = 1.0;
 
-// ============================================================================
-// NAV CONFIG
-// ============================================================================
-
-const NAV_ITEMS = [
-  { id: "overview", label: "Overview", icon: icons.home, requires: null },
-  { id: "profile", label: "Your info", icon: icons.user, requires: null },
-  { id: "concern", label: "Your concern", icon: icons.clipboard, requires: null },
-  { id: "picture", label: "The picture", icon: icons.stethoscope, requires: "concern" },
-  { id: "coverage", label: "Coverage", icon: icons.shield, requires: "both" },
-  { id: "gps", label: "Next steps", icon: icons.compass, requires: "both" },
-  { id: "roadmap", label: "Roadmap", icon: icons.map, requires: "both" },
-];
-
-// ============================================================================
-// EMPTY STATE
-// ============================================================================
-
-const EmptyState = ({ title, description, actions }) => (
-  <div className="flex items-center justify-center min-h-[60vh]">
-    <Card className="max-w-md w-full p-8 text-center">
-      <div className="inline-flex items-center justify-center w-14 h-14 rounded-full mb-5" style={{ backgroundColor: "#F1F5FA" }}>
-        <Icon path={icons.lock} size={22} style={{ color: "#5A6B8C" }} />
-      </div>
-      <Heading level={2} className="mb-2">{title}</Heading>
-      <p className="text-[15px] leading-relaxed mb-6" style={{ color: "#5A6B8C" }}>{description}</p>
-      <div className="flex flex-col sm:flex-row gap-2 justify-center">{actions}</div>
-    </Card>
-  </div>
-);
-
-// ============================================================================
-// TABS
-// ============================================================================
-
-const OverviewTab = ({ profile, concern, aiResult, plan, completion, navigate }) => {
-  const cards = [
-    { id: "profile", title: "Your info", icon: icons.user, done: completion.profile,
-      desc: completion.profile ? `${plan?.name} · ZIP ${profile.zip}` : "Tell us your plan and ZIP code." },
-    { id: "concern", title: "Your concern", icon: icons.clipboard, done: completion.concern,
-      desc: completion.concern ? `"${concern.text.slice(0, 60)}${concern.text.length > 60 ? "…" : ""}"` : "Describe your diagnosis or symptoms." },
-    { id: "picture", title: "The picture", icon: icons.stethoscope, done: !!aiResult,
-      desc: aiResult ? aiResult.condition_name : "We'll analyze what you shared." },
-    { id: "coverage", title: "Coverage", icon: icons.shield, done: completion.both,
-      desc: completion.both ? `${plan.name} · $${plan.specialistCopay} specialist copay` : "See what your plan actually covers." },
-    { id: "gps", title: "Next steps", icon: icons.compass, done: completion.both,
-      desc: completion.both ? "Your step-by-step action plan." : "Where to go and in what order." },
-    { id: "roadmap", title: "Roadmap", icon: icons.map, done: completion.both,
-      desc: completion.both ? "This week, next two weeks, ongoing." : "Your full timeline, copy-ready." },
-  ];
-
-  return (
-    <div className="space-y-8">
-      <div>
-        <div className="inline-flex items-center gap-2 mb-3 px-3 py-1 rounded-full" style={{ backgroundColor: "#ECFDF5", color: "#0D9488" }}>
-          <Icon path={icons.sparkle} size={13} />
-          <span className="text-[11px] font-semibold tracking-wider uppercase">Welcome</span>
-        </div>
-        <Heading level={1} className="mb-3">
-          {completion.both ? `Here's your dashboard.` : `Let's get you a care plan.`}
-        </Heading>
-        <p className="text-[16px] leading-relaxed max-w-2xl" style={{ color: "#5A6B8C" }}>
-          {completion.both
-            ? `Everything you need is in the sidebar. Jump between sections freely — your info is saved.`
-            : `Two quick sections to fill out, then you'll have a full coverage-aware action plan. Start wherever makes sense.`}
-        </p>
-      </div>
-
-      {!completion.both && (
-        <Card className="p-5">
-          <div className="flex items-center justify-between mb-3">
-            <SectionLabel>Setup progress</SectionLabel>
-            <span className="text-[13px] font-semibold" style={{ color: "#0D9488" }}>
-              {completion.profile && completion.concern ? "2 of 2" : completion.profile || completion.concern ? "1 of 2" : "0 of 2"}
-            </span>
-          </div>
-          <div className="h-1.5 bg-stone-200 rounded-full overflow-hidden">
-            <div className="h-full rounded-full transition-all duration-500"
-                 style={{ width: `${((completion.profile ? 1 : 0) + (completion.concern ? 1 : 0)) * 50}%`, backgroundColor: "#0D9488" }} />
-          </div>
-        </Card>
-      )}
-
-      <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {cards.map((c) => (
-          <button key={c.id} onClick={() => navigate(c.id)} className="text-left group">
-            <Card className="p-5 h-full transition hover:-translate-y-0.5 hover:shadow-lg">
-              <div className="flex items-start justify-between mb-3">
-                <div className="inline-flex items-center justify-center w-10 h-10 rounded-xl"
-                     style={{ backgroundColor: c.done ? "#ECFDF5" : "#F1F5FA", color: c.done ? "#0D9488" : "#5A6B8C" }}>
-                  <Icon path={c.icon} size={18} />
-                </div>
-                {c.done ? (
-                  <Badge tone="ok"><Icon path={icons.check} size={10} /> Ready</Badge>
-                ) : (
-                  <Badge tone="neutral">—</Badge>
-                )}
-              </div>
-              <Heading level={3} className="mb-1.5">{c.title}</Heading>
-              <p className="text-[13px] leading-relaxed" style={{ color: "#5A6B8C" }}>{c.desc}</p>
-            </Card>
-          </button>
-        ))}
-      </div>
-
-      <Banner tone="info" icon={<Icon path={icons.shield} size={18} />} title="Your info stays on this device">
-        We don't store anything. Close the tab and it's gone.
-      </Banner>
-    </div>
-  );
-};
-
-const ProfileTab = ({ profile, setProfile, navigate }) => {
-  const canSave = profile.provider && profile.planType && profile.zip.length >= 5;
-  const handleProviderChange = (provider) => {
-    const typeMap = { BCBS: "PPO", Aetna: "HMO", United: "EPO" };
-    setProfile({ ...profile, provider, planType: typeMap[provider] || "" });
+  const heatFill = (region) => {
+    if (!heatmap) return "transparent";
+    const count = heatmap[region] || 0;
+    if (count === 0) return "transparent";
+    const max = Math.max(...Object.values(heatmap), 1);
+    const intensity = count / max;
+    if (intensity < 0.34) return `rgba(123, 174, 143, ${0.3 + intensity * 0.4})`;
+    if (intensity < 0.67) return `rgba(212, 168, 67, ${0.4 + intensity * 0.4})`;
+    return `rgba(232, 115, 90, ${0.45 + intensity * 0.45})`;
   };
 
   return (
-    <div className="space-y-6 max-w-2xl">
-      <div>
-        <Heading level={1} className="mb-2">Your info</Heading>
-        <p className="text-[15px] leading-relaxed" style={{ color: "#5A6B8C" }}>
-          We use this to figure out what's actually covered and find in-network doctors nearby.
-        </p>
-      </div>
+    <svg viewBox="0 0 200 500" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet" style={{ width: "100%", height: "100%", display: "block" }}>
+      <defs>
+        <linearGradient id="torsoShadeBack" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0%" stopColor={skinLight} />
+          <stop offset="50%" stopColor={skin} />
+          <stop offset="100%" stopColor={skinShade} />
+        </linearGradient>
+        <linearGradient id="limbShadeBack" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0%" stopColor={skinLight} />
+          <stop offset="100%" stopColor={skinShade} />
+        </linearGradient>
+      </defs>
 
-      <Card className="p-6 md:p-7 space-y-5">
-        <Field label="Insurance provider">
-          <Select value={profile.provider} onChange={(e) => handleProviderChange(e.target.value)}>
-            <option value="">Select your insurance…</option>
-            <option value="BCBS">Blue Cross Blue Shield</option>
-            <option value="Aetna">Aetna</option>
-            <option value="United">United Healthcare</option>
-          </Select>
-        </Field>
-
-        <Field label="Plan type">
-          <Select value={profile.planType} onChange={(e) => setProfile({ ...profile, planType: e.target.value })} disabled={!profile.provider}>
-            <option value="">Select your plan type…</option>
-            <option value="PPO">PPO</option>
-            <option value="HMO">HMO</option>
-            <option value="EPO">EPO</option>
-          </Select>
-        </Field>
-
-        <Field label="ZIP code" hint="We use this to find in-network doctors nearby.">
-          <Input type="text" inputMode="numeric" maxLength={5} placeholder="e.g. 78701"
-                 value={profile.zip}
-                 onChange={(e) => setProfile({ ...profile, zip: e.target.value.replace(/\D/g, "") })} />
-        </Field>
-      </Card>
-
-      {canSave && (
-        <div className="flex items-center justify-between flex-wrap gap-3">
-          <Badge tone="ok"><Icon path={icons.check} size={10} /> Info saved</Badge>
-          <Button onClick={() => navigate("concern")}>
-            Continue to your concern <Icon path={icons.arrowRight} size={16} />
-          </Button>
-        </div>
-      )}
-    </div>
-  );
-};
-
-const ConcernTab = ({ concern, setConcern, onAnalyze, loading, navigate }) => {
-  const canAnalyze = concern.text.trim().length > 3 && concern.status;
-
-  return (
-    <div className="space-y-6 max-w-2xl">
-      <div>
-        <Heading level={1} className="mb-2">What's going on?</Heading>
-        <p className="text-[15px] leading-relaxed" style={{ color: "#5A6B8C" }}>
-          Tell us in your own words — a diagnosis from a doctor, or the symptoms you've been dealing with.
-        </p>
-      </div>
-
-      <Card className="p-6 md:p-7 space-y-5">
-        <Field label="Your diagnosis or symptoms">
-          <Textarea rows={5} placeholder="e.g. My doctor just told me I have Type 2 diabetes. My A1C was 7.8."
-                    value={concern.text} onChange={(e) => setConcern({ ...concern, text: e.target.value })} />
-        </Field>
-
-        <Field label="Is this…">
-          <div className="grid grid-cols-2 gap-3">
-            {[
-              { key: "new", label: "New diagnosis", sub: "Just found out" },
-              { key: "ongoing", label: "Ongoing condition", sub: "Managing it" },
-            ].map((opt) => {
-              const active = concern.status === opt.key;
-              return (
-                <button key={opt.key} onClick={() => setConcern({ ...concern, status: opt.key })}
-                        className="text-left p-4 rounded-xl border-2 transition"
-                        style={{ borderColor: active ? "#0D9488" : "#E2E8F0", backgroundColor: active ? "#F0FDFA" : "white" }}>
-                  <div className="font-semibold text-[14px]" style={{ color: "#1B2B4B" }}>{opt.label}</div>
-                  <div className="text-[12px] mt-0.5" style={{ color: "#5A6B8C" }}>{opt.sub}</div>
-                </button>
-              );
-            })}
-          </div>
-        </Field>
-      </Card>
-
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <Button variant="ghost" onClick={() => navigate("overview")}>
-          <Icon path={icons.arrowLeft} size={16} /> Back to overview
-        </Button>
-        <Button onClick={() => onAnalyze(navigate)} disabled={!canAnalyze || loading}>
-          {loading ? "Analyzing…" : "Analyze"} <Icon path={icons.arrowRight} size={16} />
-        </Button>
-      </div>
-    </div>
-  );
-};
-
-const PictureTab = ({ aiResult, loading, navigate, onReanalyze }) => {
-  if (loading) {
-    return (
-      <div className="space-y-6 max-w-3xl">
-        <Heading level={1}>Reading through that now…</Heading>
-        <Card className="p-8 md:p-10">
-          <div className="flex items-center gap-4 mb-6">
-            <div className="relative w-10 h-10">
-              <div className="absolute inset-0 rounded-full border-2 border-stone-200" />
-              <div className="absolute inset-0 rounded-full border-2 border-transparent animate-spin"
-                   style={{ borderTopColor: "#0D9488", animationDuration: "0.9s" }} />
-            </div>
-            <div>
-              <div className="font-semibold text-[15px]" style={{ color: "#1B2B4B" }}>Analyzing your condition</div>
-              <div className="text-[13px]" style={{ color: "#5A6B8C" }}>This takes about 5 seconds.</div>
-            </div>
-          </div>
-          <div className="space-y-3">
-            {[80, 95, 70, 85, 60].map((w, i) => (
-              <div key={i} className="h-3 rounded-full bg-stone-100 animate-pulse"
-                   style={{ width: `${w}%`, animationDelay: `${i * 0.12}s` }} />
-            ))}
-          </div>
-        </Card>
-      </div>
-    );
-  }
-
-  if (!aiResult) {
-    return (
-      <EmptyState
-        title="Tell us what's going on first"
-        description="Once you describe your diagnosis or symptoms, we'll break down what the condition means, what specialists you'll need, and what your plan covers."
-        actions={<Button onClick={() => navigate("concern")}>Go to 'Your concern' <Icon path={icons.arrowRight} size={16} /></Button>}
+      {/* ============ HEAD (back) ============ */}
+      {/* Head shape — same as front but covered by hair */}
+      <path
+        d="M 82 38 Q 82 26 100 24 Q 118 26 118 38 L 118 52 Q 118 64 114 68 Q 110 72 100 72 Q 90 72 86 68 Q 82 64 82 52 Z"
+        fill={skin}
+        stroke={stroke}
+        strokeWidth={sw}
       />
-    );
-  }
-
-  return (
-    <div className="space-y-6">
-      <div className="flex items-start justify-between flex-wrap gap-3">
-        <div>
-          <div className="inline-flex items-center gap-2 mb-3 px-3 py-1 rounded-full" style={{ backgroundColor: "#F1F5FA", color: "#1B2B4B" }}>
-            <Icon path={icons.stethoscope} size={13} />
-            <span className="text-[11px] font-semibold tracking-wider uppercase">The picture</span>
-          </div>
-          <Heading level={1}>{aiResult.condition_name}</Heading>
-        </div>
-        <Button variant="ghost" onClick={() => onReanalyze(navigate)}>
-          <Icon path={icons.refresh} size={14} /> Re-analyze
-        </Button>
-      </div>
-
-      <Card className="p-6 md:p-8">
-        <p className="text-[16px] leading-relaxed" style={{ color: "#1B2B4B" }}>
-          {aiResult.plain_english_summary}
-        </p>
-      </Card>
-
-      <div className="grid md:grid-cols-2 gap-4">
-        <Card className="p-6">
-          <div className="flex items-center gap-2 mb-3">
-            <Icon path={icons.stethoscope} size={18} style={{ color: "#0D9488" }} />
-            <SectionLabel>Specialists you'll see</SectionLabel>
-          </div>
-          <ul className="space-y-2">
-            {aiResult.required_specialists.map((s, i) => (
-              <li key={i} className="text-[14px] flex gap-2" style={{ color: "#1B2B4B" }}>
-                <span style={{ color: "#0D9488", fontWeight: "bold" }}>·</span>{s}
-              </li>
-            ))}
-          </ul>
-        </Card>
-
-        <Card className="p-6">
-          <div className="flex items-center gap-2 mb-3">
-            <Icon path={icons.beaker} size={18} style={{ color: "#0D9488" }} />
-            <SectionLabel>Labs you'll need</SectionLabel>
-          </div>
-          <ul className="space-y-2">
-            {aiResult.required_labs.map((s, i) => (
-              <li key={i} className="text-[14px] flex gap-2" style={{ color: "#1B2B4B" }}>
-                <span style={{ color: "#0D9488", fontWeight: "bold" }}>·</span>{s}
-              </li>
-            ))}
-          </ul>
-        </Card>
-
-        <Card className="p-6">
-          <div className="flex items-center gap-2 mb-3">
-            <Icon path={icons.pill} size={18} style={{ color: "#0D9488" }} />
-            <SectionLabel>Common medications</SectionLabel>
-          </div>
-          {aiResult.typical_medications.length ? (
-            <ul className="space-y-2">
-              {aiResult.typical_medications.map((s, i) => (
-                <li key={i} className="text-[14px] flex gap-2" style={{ color: "#1B2B4B" }}>
-                  <span style={{ color: "#0D9488", fontWeight: "bold" }}>·</span>{s}
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="text-[14px]" style={{ color: "#5A6B8C" }}>Your doctor will decide based on the full workup.</p>
-          )}
-          <div className="mt-3 pt-3 border-t border-stone-100">
-            <div className="text-[12px]" style={{ color: "#5A6B8C" }}>
-              <strong style={{ color: "#1B2B4B" }}>Visit cadence:</strong> {aiResult.visit_frequency}
-            </div>
-          </div>
-        </Card>
-
-        <Card className="p-6">
-          <div className="flex items-center gap-2 mb-3">
-            <Icon path={icons.leaf} size={18} style={{ color: "#0D9488" }} />
-            <SectionLabel>Lifestyle</SectionLabel>
-          </div>
-          <p className="text-[14px] leading-relaxed" style={{ color: "#1B2B4B" }}>{aiResult.lifestyle_note}</p>
-        </Card>
-      </div>
-
-      <Banner tone="info" icon={<Icon path={icons.alert} size={18} />} title="This is guidance, not a diagnosis">
-        ClearCare helps you prepare — your doctor makes the call.
-      </Banner>
-    </div>
-  );
-};
-
-const CoverageTab = ({ plan, aiResult, effectiveReferralRule, navigate, completion }) => {
-  if (!completion.both) {
-    return (
-      <EmptyState
-        title="Fill out your info and concern first"
-        description="We need to know your plan and what you're being treated for before we can show coverage details."
-        actions={
-          <>
-            {!completion.profile && <Button onClick={() => navigate("profile")}>Add your info</Button>}
-            {!completion.concern && <Button variant={completion.profile ? "primary" : "secondary"} onClick={() => navigate("concern")}>Describe your concern</Button>}
-          </>
-        }
+      {/* Hair covering back of head */}
+      <path
+        d="M 78 36 Q 76 20 90 16 Q 100 12 110 16 Q 124 20 122 36 L 122 60 Q 120 66 116 68 L 116 56 Q 114 50 108 50 L 92 50 Q 86 50 84 56 L 84 68 Q 80 66 78 60 Z"
+        fill={hair}
+        stroke={stroke}
+        strokeWidth={sw * 0.8}
       />
-    );
-  }
+      {/* Hair highlight strands */}
+      <path d="M 88 22 Q 92 30 90 42" stroke={hairHighlight} strokeWidth="0.6" fill="none" opacity="0.6" />
+      <path d="M 100 18 Q 100 30 100 44" stroke={hairHighlight} strokeWidth="0.6" fill="none" opacity="0.5" />
+      <path d="M 112 22 Q 108 30 110 42" stroke={hairHighlight} strokeWidth="0.6" fill="none" opacity="0.6" />
+      {/* Hair nape/bottom edge */}
+      <path d="M 84 62 Q 100 68 116 62" stroke={hair} strokeWidth="1.2" fill="none" />
 
-  const medsToShow = aiResult.typical_medications.length ? aiResult.typical_medications : [];
-  const headerLine = effectiveReferralRule
-    ? `Your ${plan.name} covers most of this, but you'll need a referral first.`
-    : `Your ${plan.name} covers most of this — no referral needed.`;
+      {/* Ears (partially visible) */}
+      <path d="M 80 46 Q 78 48 78 52 Q 78 54 80 55" fill={skinShade} stroke={stroke} strokeWidth={sw * 0.7} />
+      <path d="M 120 46 Q 122 48 122 52 Q 122 54 120 55" fill={skinShade} stroke={stroke} strokeWidth={sw * 0.7} />
 
-  return (
-    <div className="space-y-6">
-      <div>
-        <div className="inline-flex items-center gap-2 mb-3 px-3 py-1 rounded-full" style={{ backgroundColor: "#F1F5FA", color: "#1B2B4B" }}>
-          <Icon path={icons.shield} size={13} />
-          <span className="text-[11px] font-semibold tracking-wider uppercase">Your coverage</span>
-        </div>
-        <Heading level={1} className="mb-2">{headerLine}</Heading>
-        <p className="text-[15px]" style={{ color: "#5A6B8C" }}>
-          Deductible: <strong style={{ color: "#1B2B4B" }}>${plan.deductible.toLocaleString()}</strong>
-          {" · "}PCP visit: <strong style={{ color: "#1B2B4B" }}>${plan.pcpCopay}</strong>
-          {" · "}Specialist visit: <strong style={{ color: "#1B2B4B" }}>${plan.specialistCopay}</strong>
-        </p>
-      </div>
+      {/* Neck */}
+      <path
+        d="M 93 70 L 92 82 Q 92 84 94 85 L 106 85 Q 108 84 108 82 L 107 70 Z"
+        fill={skin}
+        stroke={stroke}
+        strokeWidth={sw}
+      />
+      {/* Neck back crease */}
+      <path d="M 94 75 Q 100 77 106 75" stroke={stroke} strokeWidth="0.5" fill="none" opacity="0.5" />
 
-      {effectiveReferralRule && (
-        <Banner tone="warn" icon={<Icon path={icons.alert} size={18} />} title="Referral required">
-          Your plan needs a referral from your PCP before a specialist visit will be covered. We'll walk you through that in Next steps.
-        </Banner>
+      {/* ============ TORSO (back view) ============ */}
+      <path
+        d="M 94 85
+           Q 82 86 74 92
+           Q 66 96 64 106
+           L 61 125
+           Q 58 148 62 168
+           L 66 195
+           Q 68 210 70 220
+           Q 70 230 72 245
+           Q 74 258 80 268
+           Q 88 272 100 272
+           Q 112 272 120 268
+           Q 126 258 128 245
+           Q 130 230 130 220
+           Q 132 210 134 195
+           L 138 168
+           Q 142 148 139 125
+           L 136 106
+           Q 134 96 126 92
+           Q 118 86 106 85
+           Z"
+        fill="url(#torsoShadeBack)"
+        stroke={stroke}
+        strokeWidth={sw}
+      />
+
+      {/* Spine indentation */}
+      <path d="M 100 92 L 100 220" stroke={stroke} strokeWidth="0.7" fill="none" opacity="0.45" strokeDasharray="2 2" />
+      {/* Shoulder blade hints */}
+      <path d="M 76 108 Q 82 120 86 135" stroke={stroke} strokeWidth="0.6" fill="none" opacity="0.4" />
+      <path d="M 124 108 Q 118 120 114 135" stroke={stroke} strokeWidth="0.6" fill="none" opacity="0.4" />
+      {/* Lower back dimples */}
+      <circle cx="90" cy="230" r="1.2" fill={stroke} opacity="0.3" />
+      <circle cx="110" cy="230" r="1.2" fill={stroke} opacity="0.3" />
+      {/* Waist indent */}
+      <path d="M 70 210 Q 72 218 70 225" stroke={stroke} strokeWidth="0.4" fill="none" opacity="0.3" />
+      <path d="M 130 210 Q 128 218 130 225" stroke={stroke} strokeWidth="0.4" fill="none" opacity="0.3" />
+
+      {/* ============ LEFT ARM ============ */}
+      <path
+        d="M 74 92
+           Q 62 96 58 108
+           Q 54 122 52 140
+           Q 51 154 53 162
+           L 55 164
+           Q 58 158 60 145
+           Q 63 125 68 108
+           Q 72 98 74 92 Z"
+        fill="url(#limbShadeBack)"
+        stroke={stroke}
+        strokeWidth={sw}
+      />
+      <circle cx="53" cy="164" r="5.5" fill={skin} stroke={stroke} strokeWidth={sw} />
+      <path
+        d="M 48 164
+           Q 46 180 46 200
+           Q 46 218 48 232
+           Q 49 240 52 241
+           Q 56 242 57 236
+           Q 58 222 58 208
+           Q 58 188 58 168 Z"
+        fill="url(#limbShadeBack)"
+        stroke={stroke}
+        strokeWidth={sw}
+      />
+      <path d="M 48 240 Q 52 242 57 240" stroke={stroke} strokeWidth="0.6" fill="none" opacity="0.5" />
+      {/* Hand (back of hand showing knuckles) */}
+      <path
+        d="M 48 240
+           Q 46 245 46 252
+           Q 46 260 50 262
+           Q 54 263 58 261
+           Q 60 258 60 250
+           Q 59 244 57 240 Z"
+        fill={skin}
+        stroke={stroke}
+        strokeWidth={sw}
+      />
+      {/* Knuckle line */}
+      <path d="M 48 252 Q 53 253 58 252" stroke={stroke} strokeWidth="0.4" fill="none" opacity="0.4" />
+
+      {/* ============ RIGHT ARM ============ */}
+      <path
+        d="M 126 92
+           Q 138 96 142 108
+           Q 146 122 148 140
+           Q 149 154 147 162
+           L 145 164
+           Q 142 158 140 145
+           Q 137 125 132 108
+           Q 128 98 126 92 Z"
+        fill="url(#limbShadeBack)"
+        stroke={stroke}
+        strokeWidth={sw}
+      />
+      <circle cx="147" cy="164" r="5.5" fill={skin} stroke={stroke} strokeWidth={sw} />
+      <path
+        d="M 152 164
+           Q 154 180 154 200
+           Q 154 218 152 232
+           Q 151 240 148 241
+           Q 144 242 143 236
+           Q 142 222 142 208
+           Q 142 188 142 168 Z"
+        fill="url(#limbShadeBack)"
+        stroke={stroke}
+        strokeWidth={sw}
+      />
+      <path d="M 143 240 Q 148 242 152 240" stroke={stroke} strokeWidth="0.6" fill="none" opacity="0.5" />
+      <path
+        d="M 152 240
+           Q 154 245 154 252
+           Q 154 260 150 262
+           Q 146 263 142 261
+           Q 140 258 140 250
+           Q 141 244 143 240 Z"
+        fill={skin}
+        stroke={stroke}
+        strokeWidth={sw}
+      />
+      <path d="M 142 252 Q 147 253 152 252" stroke={stroke} strokeWidth="0.4" fill="none" opacity="0.4" />
+
+      {/* ============ LEFT LEG ============ */}
+      <path
+        d="M 80 268
+           Q 76 290 75 320
+           Q 75 345 77 360
+           L 82 362
+           Q 84 345 86 320
+           Q 88 295 90 272
+           Z"
+        fill="url(#limbShadeBack)"
+        stroke={stroke}
+        strokeWidth={sw}
+      />
+      {/* Back of knee (crease instead of kneecap) */}
+      <ellipse cx="80" cy="364" rx="7" ry="5" fill={skinShade} stroke={stroke} strokeWidth={sw} opacity="0.9" />
+      <path d="M 75 364 Q 80 362 85 364" stroke={stroke} strokeWidth="0.6" fill="none" opacity="0.5" />
+      {/* Calf (more defined on back view) */}
+      <path
+        d="M 73 370
+           Q 72 400 74 430
+           Q 75 450 78 462
+           Q 80 470 84 470
+           Q 88 470 88 462
+           Q 88 450 88 430
+           Q 88 400 87 370
+           Z"
+        fill="url(#limbShadeBack)"
+        stroke={stroke}
+        strokeWidth={sw}
+      />
+      {/* Calf muscle hint */}
+      <path d="M 76 395 Q 74 410 76 425" stroke={stroke} strokeWidth="0.4" fill="none" opacity="0.3" />
+      <path d="M 76 466 Q 82 470 88 466" stroke={stroke} strokeWidth="0.5" fill="none" opacity="0.4" />
+      {/* Heel view of foot */}
+      <path
+        d="M 76 470
+           Q 72 474 72 480
+           Q 72 484 78 485
+           Q 86 485 92 482
+           Q 92 476 90 470 Z"
+        fill={skin}
+        stroke={stroke}
+        strokeWidth={sw}
+      />
+
+      {/* ============ RIGHT LEG ============ */}
+      <path
+        d="M 120 268
+           Q 124 290 125 320
+           Q 125 345 123 360
+           L 118 362
+           Q 116 345 114 320
+           Q 112 295 110 272
+           Z"
+        fill="url(#limbShadeBack)"
+        stroke={stroke}
+        strokeWidth={sw}
+      />
+      <ellipse cx="120" cy="364" rx="7" ry="5" fill={skinShade} stroke={stroke} strokeWidth={sw} opacity="0.9" />
+      <path d="M 115 364 Q 120 362 125 364" stroke={stroke} strokeWidth="0.6" fill="none" opacity="0.5" />
+      <path
+        d="M 127 370
+           Q 128 400 126 430
+           Q 125 450 122 462
+           Q 120 470 116 470
+           Q 112 470 112 462
+           Q 112 450 112 430
+           Q 112 400 113 370
+           Z"
+        fill="url(#limbShadeBack)"
+        stroke={stroke}
+        strokeWidth={sw}
+      />
+      <path d="M 124 395 Q 126 410 124 425" stroke={stroke} strokeWidth="0.4" fill="none" opacity="0.3" />
+      <path d="M 112 466 Q 118 470 124 466" stroke={stroke} strokeWidth="0.5" fill="none" opacity="0.4" />
+      <path
+        d="M 124 470
+           Q 128 474 128 480
+           Q 128 484 122 485
+           Q 114 485 108 482
+           Q 108 476 110 470 Z"
+        fill={skin}
+        stroke={stroke}
+        strokeWidth={sw}
+      />
+
+      {/* ============ HEATMAP OVERLAYS ============ */}
+      <ellipse cx="100" cy="48" rx="20" ry="26" fill={heatFill("head")} pointerEvents="none" />
+      <circle cx="78" cy="95" r="11" fill={heatFill("left_shoulder")} pointerEvents="none" />
+      <circle cx="122" cy="95" r="11" fill={heatFill("right_shoulder")} pointerEvents="none" />
+      <ellipse cx="100" cy="140" rx="30" ry="30" fill={heatFill("upper_back")} pointerEvents="none" />
+      <ellipse cx="100" cy="210" rx="30" ry="28" fill={heatFill("lower_back")} pointerEvents="none" />
+      <ellipse cx="52" cy="175" rx="11" ry="35" fill={heatFill("left_arm")} pointerEvents="none" />
+      <ellipse cx="148" cy="175" rx="11" ry="35" fill={heatFill("right_arm")} pointerEvents="none" />
+      <circle cx="82" cy="262" r="12" fill={heatFill("left_hip")} pointerEvents="none" />
+      <circle cx="118" cy="262" r="12" fill={heatFill("right_hip")} pointerEvents="none" />
+      <circle cx="80" cy="364" r="13" fill={heatFill("left_knee")} pointerEvents="none" />
+      <circle cx="120" cy="364" r="13" fill={heatFill("right_knee")} pointerEvents="none" />
+      <ellipse cx="82" cy="478" rx="12" ry="8" fill={heatFill("left_foot")} pointerEvents="none" />
+      <ellipse cx="118" cy="478" rx="12" ry="8" fill={heatFill("right_foot")} pointerEvents="none" />
+
+      {/* ============ TAP ZONES ============ */}
+      {!heatmap && (
+        <g>
+          <ellipse cx="100" cy="45" rx="24" ry="32" fill="transparent" onClick={() => onRegionTap("head")} style={{ cursor: "pointer" }} />
+          <circle cx="78" cy="95" r="15" fill="transparent" onClick={() => onRegionTap("left_shoulder")} style={{ cursor: "pointer" }} />
+          <circle cx="122" cy="95" r="15" fill="transparent" onClick={() => onRegionTap("right_shoulder")} style={{ cursor: "pointer" }} />
+          <ellipse cx="100" cy="145" rx="32" ry="34" fill="transparent" onClick={() => onRegionTap("upper_back")} style={{ cursor: "pointer" }} />
+          <ellipse cx="100" cy="215" rx="32" ry="32" fill="transparent" onClick={() => onRegionTap("lower_back")} style={{ cursor: "pointer" }} />
+          <ellipse cx="52" cy="180" rx="16" ry="52" fill="transparent" onClick={() => onRegionTap("left_arm")} style={{ cursor: "pointer" }} />
+          <ellipse cx="148" cy="180" rx="16" ry="52" fill="transparent" onClick={() => onRegionTap("right_arm")} style={{ cursor: "pointer" }} />
+          <circle cx="82" cy="262" r="16" fill="transparent" onClick={() => onRegionTap("left_hip")} style={{ cursor: "pointer" }} />
+          <circle cx="118" cy="262" r="16" fill="transparent" onClick={() => onRegionTap("right_hip")} style={{ cursor: "pointer" }} />
+          <circle cx="80" cy="364" r="18" fill="transparent" onClick={() => onRegionTap("left_knee")} style={{ cursor: "pointer" }} />
+          <circle cx="120" cy="364" r="18" fill="transparent" onClick={() => onRegionTap("right_knee")} style={{ cursor: "pointer" }} />
+          <ellipse cx="82" cy="478" rx="14" ry="12" fill="transparent" onClick={() => onRegionTap("left_foot")} style={{ cursor: "pointer" }} />
+          <ellipse cx="118" cy="478" rx="14" ry="12" fill="transparent" onClick={() => onRegionTap("right_foot")} style={{ cursor: "pointer" }} />
+        </g>
       )}
 
-      <Card className="p-6">
-        <div className="flex items-center gap-2 mb-4">
-          <Icon path={icons.stethoscope} size={18} style={{ color: "#0D9488" }} />
-          <SectionLabel>Specialist visits</SectionLabel>
-        </div>
-        <div className="space-y-3">
-          {aiResult.required_specialists.map((s, i) => (
-            <div key={i} className="flex items-center justify-between py-2 border-b border-stone-100 last:border-0">
-              <div className="text-[15px]" style={{ color: "#1B2B4B" }}>{s}</div>
-              <div className="text-[15px] font-semibold" style={{ color: "#059669" }}>${plan.specialistCopay} copay</div>
-            </div>
-          ))}
-        </div>
-      </Card>
-
-      {medsToShow.length > 0 && (
-        <Card className="p-6">
-          <div className="flex items-center gap-2 mb-4">
-            <Icon path={icons.pill} size={18} style={{ color: "#0D9488" }} />
-            <SectionLabel>Medications</SectionLabel>
-          </div>
-          <div className="space-y-3">
-            {medsToShow.map((m, i) => {
-              const isMetformin = /metformin/i.test(m);
-              const covered = isMetformin && plan.medications.metformin?.covered;
-              return (
-                <div key={i} className="flex items-center justify-between py-2 border-b border-stone-100 last:border-0">
-                  <div className="text-[15px]" style={{ color: "#1B2B4B" }}>{m}</div>
-                  {covered ? (
-                    <div className="text-[15px] font-semibold" style={{ color: "#059669" }}>${plan.medications.metformin.cost}/month</div>
-                  ) : isMetformin ? (
-                    <div className="text-[15px] font-semibold" style={{ color: "#DC2626" }}>Not covered</div>
-                  ) : (
-                    <Badge tone="neutral">Check with pharmacist</Badge>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </Card>
-      )}
-
-      <Card className="p-6">
-        <div className="flex items-center gap-2 mb-4">
-          <Icon path={icons.leaf} size={18} style={{ color: "#0D9488" }} />
-          <SectionLabel>Preventive services</SectionLabel>
-        </div>
-        <div className="flex items-center justify-between py-2">
-          <div className="text-[15px]" style={{ color: "#1B2B4B" }}>Registered dietitian / nutritionist</div>
-          {plan.nutritionist.covered ? (
-            <div className="text-[15px] font-semibold" style={{ color: "#059669" }}>{plan.nutritionist.visits} visits/year · $0</div>
-          ) : (
-            <div className="text-[15px] font-semibold" style={{ color: "#DC2626" }}>Not covered</div>
-          )}
-        </div>
-      </Card>
-
-      {plan.warnings.length > 0 && (
-        <div className="space-y-3">
-          {plan.warnings.map((w, i) => (
-            <Banner key={i} tone="warn" icon={<Icon path={icons.alert} size={18} />}>{w}</Banner>
-          ))}
-        </div>
-      )}
-    </div>
+      {pulseRegion && <PulseRing region={pulseRegion} view="back" />}
+    </svg>
   );
+}
+
+const REGION_COORDS_FRONT = {
+  head: { cx: 100, cy: 48 },
+  left_shoulder: { cx: 78, cy: 95 },
+  right_shoulder: { cx: 122, cy: 95 },
+  chest: { cx: 100, cy: 135 },
+  abdomen: { cx: 100, cy: 200 },
+  left_arm: { cx: 52, cy: 175 },
+  right_arm: { cx: 148, cy: 175 },
+  left_hip: { cx: 82, cy: 262 },
+  right_hip: { cx: 118, cy: 262 },
+  left_knee: { cx: 80, cy: 364 },
+  right_knee: { cx: 120, cy: 364 },
+  left_foot: { cx: 82, cy: 478 },
+  right_foot: { cx: 118, cy: 478 },
 };
 
-const GpsTab = ({ gpsSteps, checks, setChecks, navigate, completion }) => {
-  if (!completion.both) {
-    return (
-      <EmptyState
-        title="We need a bit more info"
-        description="Once you've told us your plan and what you're dealing with, we'll lay out exactly where to go and in what order."
-        actions={
-          <>
-            {!completion.profile && <Button onClick={() => navigate("profile")}>Add your info</Button>}
-            {!completion.concern && <Button variant={completion.profile ? "primary" : "secondary"} onClick={() => navigate("concern")}>Describe your concern</Button>}
-          </>
-        }
+const REGION_COORDS_BACK = {
+  head: { cx: 100, cy: 48 },
+  left_shoulder: { cx: 78, cy: 95 },
+  right_shoulder: { cx: 122, cy: 95 },
+  upper_back: { cx: 100, cy: 140 },
+  lower_back: { cx: 100, cy: 210 },
+  left_arm: { cx: 52, cy: 175 },
+  right_arm: { cx: 148, cy: 175 },
+  left_hip: { cx: 82, cy: 262 },
+  right_hip: { cx: 118, cy: 262 },
+  left_knee: { cx: 80, cy: 364 },
+  right_knee: { cx: 120, cy: 364 },
+  left_foot: { cx: 82, cy: 478 },
+  right_foot: { cx: 118, cy: 478 },
+};
+
+function PulseRing({ region, view }) {
+  const coords = view === "front" ? REGION_COORDS_FRONT[region] : REGION_COORDS_BACK[region];
+  if (!coords) return null;
+  return (
+    <g style={{ pointerEvents: "none" }}>
+      <circle
+        cx={coords.cx}
+        cy={coords.cy}
+        r={10}
+        fill="none"
+        stroke="#7BAE8F"
+        strokeWidth="1.5"
+        style={{
+          animation: "cp-pulse 650ms ease-out forwards",
+          transformOrigin: `${coords.cx}px ${coords.cy}px`,
+          transformBox: "fill-box",
+        }}
       />
-    );
-  }
-
-  const toggle = (i) => setChecks({ ...checks, [i]: !checks[i] });
-  const doneCount = Object.values(checks).filter(Boolean).length;
-
-  return (
-    <div className="space-y-6">
-      <div>
-        <div className="inline-flex items-center gap-2 mb-3 px-3 py-1 rounded-full" style={{ backgroundColor: "#ECFDF5", color: "#0D9488" }}>
-          <Icon path={icons.compass} size={13} />
-          <span className="text-[11px] font-semibold tracking-wider uppercase">Next steps</span>
-        </div>
-        <Heading level={1} className="mb-2">Here's your route.</Heading>
-        <p className="text-[15px]" style={{ color: "#5A6B8C" }}>
-          Work through these in order. Check them off as you go — {doneCount} of {gpsSteps.length} done.
-        </p>
-      </div>
-
-      <div className="space-y-4">
-        {gpsSteps.map((step, i) => {
-          const done = !!checks[i];
-          return (
-            <Card key={i} className={`p-6 transition ${done ? "opacity-60" : ""}`}>
-              <div className="flex items-start gap-4">
-                <button onClick={() => toggle(i)}
-                        className="flex items-center justify-center w-7 h-7 rounded-full border-2 transition flex-shrink-0 mt-0.5"
-                        style={{ borderColor: done ? "#0D9488" : "#CBD5E1", backgroundColor: done ? "#0D9488" : "transparent" }}>
-                  {done && <Icon path={icons.check} size={14} className="text-white" />}
-                </button>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-1">
-                    <div className="text-[11px] font-bold tracking-wider" style={{ color: "#0D9488" }}>STEP {i + 1}</div>
-                    {step.tag && <Badge tone={step.tagTone || "neutral"}>{step.tag}</Badge>}
-                  </div>
-                  <Heading level={3} className={`mb-2 ${done ? "line-through" : ""}`}>{step.title}</Heading>
-                  <p className="text-[14px] leading-relaxed mb-3" style={{ color: "#5A6B8C" }}>{step.description}</p>
-                  {step.content}
-                </div>
-              </div>
-            </Card>
-          );
-        })}
-      </div>
-    </div>
-  );
-};
-
-const RoadmapTab = ({ roadmap, plan, aiResult, navigate, reset, completion }) => {
-  const [copied, setCopied] = useState(false);
-
-  if (!completion.both) {
-    return (
-      <EmptyState
-        title="Finish the setup to see your roadmap"
-        description="Your roadmap pulls from your coverage and action steps — we need both pieces first."
-        actions={
-          <>
-            {!completion.profile && <Button onClick={() => navigate("profile")}>Add your info</Button>}
-            {!completion.concern && <Button variant={completion.profile ? "primary" : "secondary"} onClick={() => navigate("concern")}>Describe your concern</Button>}
-          </>
-        }
+      <circle
+        cx={coords.cx}
+        cy={coords.cy}
+        r={8}
+        fill="#7BAE8F"
+        fillOpacity="0.25"
+        style={{
+          animation: "cp-pulse-fill 650ms ease-out forwards",
+          transformOrigin: `${coords.cx}px ${coords.cy}px`,
+          transformBox: "fill-box",
+        }}
       />
-    );
-  }
-
-  const copyToClipboard = () => {
-    const text =
-      `CLEARCARE ROADMAP — ${aiResult.condition_name}\n` +
-      `Plan: ${plan.name}\n\n` +
-      `THIS WEEK:\n${roadmap.thisWeek.map((t) => `  • ${t}`).join("\n")}\n\n` +
-      `NEXT 2 WEEKS:\n${roadmap.next2Weeks.map((t) => `  • ${t}`).join("\n")}\n\n` +
-      `ONGOING:\n${roadmap.ongoing.map((t) => `  • ${t}`).join("\n")}\n`;
-    navigator.clipboard.writeText(text).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
-  };
-
-  const columns = [
-    { title: "This week", subtitle: "Start here", items: roadmap.thisWeek, accent: "#0D9488", bg: "#ECFDF5" },
-    { title: "Next 2 weeks", subtitle: "Book & prep", items: roadmap.next2Weeks, accent: "#1B2B4B", bg: "#F1F5FA" },
-    { title: "Ongoing", subtitle: "Stay on track", items: roadmap.ongoing, accent: "#B37400", bg: "#FEF7E7" },
-  ];
-
-  return (
-    <div className="space-y-6">
-      <div>
-        <div className="inline-flex items-center gap-2 mb-3 px-3 py-1 rounded-full" style={{ backgroundColor: "#ECFDF5", color: "#0D9488" }}>
-          <Icon path={icons.map} size={13} />
-          <span className="text-[11px] font-semibold tracking-wider uppercase">Your roadmap</span>
-        </div>
-        <Heading level={1} className="mb-2">Your full plan, at a glance.</Heading>
-        <p className="text-[15px]" style={{ color: "#5A6B8C" }}>
-          Save this, print it, or text it to yourself — whatever helps you keep it close.
-        </p>
-      </div>
-
-      <div className="grid md:grid-cols-3 gap-4">
-        {columns.map((c) => (
-          <Card key={c.title} className="overflow-hidden">
-            <div className="px-5 py-4 border-b border-stone-100" style={{ backgroundColor: c.bg }}>
-              <Heading level={3} className="mb-0.5">{c.title}</Heading>
-              <div className="text-[12px] font-medium" style={{ color: c.accent }}>{c.subtitle}</div>
-            </div>
-            <div className="p-5">
-              <ul className="space-y-3">
-                {c.items.map((item, i) => (
-                  <li key={i} className="flex gap-3 text-[14px] leading-relaxed" style={{ color: "#1B2B4B" }}>
-                    <span className="mt-1 flex-shrink-0 w-1.5 h-1.5 rounded-full" style={{ backgroundColor: c.accent }} />
-                    <span>{item}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          </Card>
-        ))}
-      </div>
-
-      <Card className="p-6 md:p-7">
-        <Heading level={3} className="mb-3">Summary</Heading>
-        <div className="grid md:grid-cols-2 gap-4 text-[14px]">
-          <div>
-            <SectionLabel>Condition</SectionLabel>
-            <div className="mt-1" style={{ color: "#1B2B4B" }}>{aiResult.condition_name}</div>
-          </div>
-          <div>
-            <SectionLabel>Insurance</SectionLabel>
-            <div className="mt-1" style={{ color: "#1B2B4B" }}>{plan.name}</div>
-          </div>
-          <div>
-            <SectionLabel>Deductible</SectionLabel>
-            <div className="mt-1" style={{ color: "#1B2B4B" }}>${plan.deductible.toLocaleString()}</div>
-          </div>
-          <div>
-            <SectionLabel>Specialist visit</SectionLabel>
-            <div className="mt-1" style={{ color: "#1B2B4B" }}>${plan.specialistCopay} copay</div>
-          </div>
-        </div>
-      </Card>
-
-      <div className="flex flex-col sm:flex-row gap-3">
-        <Button onClick={copyToClipboard} variant="secondary" className="flex-1">
-          <Icon path={copied ? icons.check : icons.copy} size={16} />
-          {copied ? "Copied to clipboard" : "Copy roadmap"}
-        </Button>
-        <Button onClick={reset} variant="ghost" className="flex-1">
-          <Icon path={icons.refresh} size={16} /> Start over
-        </Button>
-      </div>
-    </div>
+    </g>
   );
-};
+}
 
-// ============================================================================
-// SIDEBAR
-// ============================================================================
-
-const Sidebar = ({ active, navigate, completion, onClose, isMobile }) => {
-  const isLocked = (requires) => {
-    if (!requires) return false;
-    if (requires === "concern") return !completion.concern;
-    if (requires === "both") return !completion.both;
-    return false;
-  };
-
+// Empty state little figure
+function CalmFigure() {
   return (
-    <aside className="flex flex-col h-full border-r border-stone-200" style={{ backgroundColor: "#F4F3EE", width: 260 }}>
-      <div className="p-5 flex items-center justify-between">
-        <div className="flex items-center gap-2.5">
-          <div className="flex items-center justify-center w-8 h-8 rounded-lg" style={{ backgroundColor: "#0D9488" }}>
-            <Icon path={icons.shield} size={16} className="text-white" />
-          </div>
-          <div>
-            <div className="font-semibold text-[15px]" style={{ color: "#1B2B4B", fontFamily: "'Fraunces', Georgia, serif" }}>ClearCare</div>
-            <div className="text-[10px] tracking-wider uppercase" style={{ color: "#5A6B8C" }}>Care navigator</div>
-          </div>
-        </div>
-        {isMobile && (
-          <button onClick={onClose} className="p-1 rounded hover:bg-stone-200">
-            <Icon path={icons.x} size={18} style={{ color: "#1B2B4B" }} />
-          </button>
-        )}
-      </div>
-
-      <nav className="flex-1 px-3 py-2 space-y-0.5 overflow-y-auto">
-        {NAV_ITEMS.map((item) => {
-          const locked = isLocked(item.requires);
-          const isActive = active === item.id;
-          return (
-            <button key={item.id}
-                    onClick={() => { navigate(item.id); if (isMobile) onClose(); }}
-                    className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left transition"
-                    style={{
-                      backgroundColor: isActive ? "white" : "transparent",
-                      boxShadow: isActive ? "0 1px 3px rgba(27,43,75,0.08)" : "none",
-                    }}>
-              <Icon path={item.icon} size={17}
-                    style={{ color: isActive ? "#0D9488" : locked ? "#B8C0CE" : "#5A6B8C", flexShrink: 0 }} />
-              <span className="text-[14px] font-medium flex-1"
-                    style={{ color: isActive ? "#1B2B4B" : locked ? "#B8C0CE" : "#384868" }}>
-                {item.label}
-              </span>
-              {locked && <Icon path={icons.lock} size={12} style={{ color: "#B8C0CE" }} />}
-            </button>
-          );
-        })}
-      </nav>
-
-      <div className="p-4 border-t border-stone-200/70">
-        <div className="rounded-xl p-3.5" style={{ backgroundColor: "white" }}>
-          <div className="flex items-center gap-2 mb-1.5">
-            <div className="w-2 h-2 rounded-full" style={{ backgroundColor: completion.both ? "#0D9488" : "#F59E0B" }} />
-            <span className="text-[11px] font-semibold tracking-wider uppercase" style={{ color: "#5A6B8C" }}>
-              {completion.both ? "All set" : "Setup"}
-            </span>
-          </div>
-          <div className="text-[12px] leading-relaxed" style={{ color: "#5A6B8C" }}>
-            {completion.both
-              ? "Jump between sections freely — your info is saved."
-              : `${(completion.profile ? 1 : 0) + (completion.concern ? 1 : 0)} of 2 steps done. Finish to unlock everything.`}
-          </div>
-        </div>
-      </div>
-    </aside>
+    <svg viewBox="0 0 120 120" style={{ width: 120, height: 120, opacity: 0.6 }}>
+      {/* sitting figure */}
+      <circle cx="60" cy="35" r="14" fill="#F2C9A0" stroke="#D4956A" strokeWidth="0.8" />
+      <path
+        d="M 45 50 Q 40 65 42 85 L 42 95 Q 42 100 48 100 L 72 100 Q 78 100 78 95 L 78 85 Q 80 65 75 50 Q 70 46 60 46 Q 50 46 45 50 Z"
+        fill="#F2C9A0"
+        stroke="#D4956A"
+        strokeWidth="0.8"
+      />
+      <path d="M 42 100 Q 35 105 38 115" stroke="#D4956A" strokeWidth="0.8" fill="none" />
+      <path d="M 78 100 Q 85 105 82 115" stroke="#D4956A" strokeWidth="0.8" fill="none" />
+    </svg>
   );
-};
+}
 
 // ============================================================================
-// MAIN APP
+// Main app
 // ============================================================================
 
-export default function App() {
-  const [active, setActive] = useState("overview");
-  const [profile, setProfile] = useState({ provider: "", planType: "", zip: "" });
-  const [concern, setConcern] = useState({ text: "", status: "" });
-  const [aiResult, setAiResult] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [checks, setChecks] = useState({});
-  const [mobileNavOpen, setMobileNavOpen] = useState(false);
-  const [isMobile, setIsMobile] = useState(false);
+export default function ClearPain() {
+  const [entries, setEntries] = useState([]);
+  const [tab, setTab] = useState("log");
+  const [bodyView, setBodyView] = useState("front");
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const [selectedRegion, setSelectedRegion] = useState(null);
+  const [pulseRegion, setPulseRegion] = useState(null);
+  const [toast, setToast] = useState("");
+  const [reportTab, setReportTab] = useState("summary");
+  const [customTriggers, setCustomTriggers] = useState([]);
+  const [detailEntry, setDetailEntry] = useState(null);
 
+  // Load / seed entries
   useEffect(() => {
-    const check = () => setIsMobile(window.innerWidth < 900);
-    check();
-    window.addEventListener("resize", check);
-    return () => window.removeEventListener("resize", check);
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (raw) {
+        setEntries(JSON.parse(raw));
+      } else {
+        const seed = seedSampleData();
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(seed));
+        setEntries(seed);
+      }
+    } catch (err) {
+      const seed = seedSampleData();
+      setEntries(seed);
+    }
   }, []);
 
-  const plan = useMemo(() => {
-    const key = `${profile.provider}-${profile.planType}`;
-    return INSURANCE_PLANS[key] || null;
-  }, [profile]);
-
-  const completion = useMemo(() => {
-    const profileDone = !!(profile.provider && profile.planType && profile.zip.length >= 5);
-    const concernDone = !!aiResult;
-    return { profile: profileDone, concern: concernDone, both: profileDone && concernDone };
-  }, [profile, aiResult]);
-
-  const effectiveReferralRule = useMemo(() => {
-    if (!plan) return false;
-    if (plan.type === "HMO" || plan.type === "EPO") return true;
-    return plan.requiresReferral;
-  }, [plan]);
-
-  const primarySpecialistKey = useMemo(() => {
-    if (!aiResult) return "pcp";
-    const first = (aiResult.required_specialists[0] || "").toLowerCase();
-    if (first.includes("endocrin")) return "endocrinologist";
-    if (first.includes("cardio")) return "cardiologist";
-    return "pcp";
-  }, [aiResult]);
-
-  const primarySpecialistLabel = useMemo(() => {
-    if (!aiResult) return "specialist";
-    return aiResult.required_specialists[0] || "specialist";
-  }, [aiResult]);
-
-  const isDefaultZip = profile.zip === "78701";
-
-  const gpsSteps = useMemo(() => {
-    if (!aiResult || !plan) return [];
-    const steps = [];
-    const specialists = DOCTORS_78701[primarySpecialistKey] || DOCTORS_78701.pcp;
-    const primaryLab = aiResult.required_labs[0] || "baseline labs";
-
-    if (effectiveReferralRule) {
-      const pcps = DOCTORS_78701.pcp;
-      steps.push({
-        title: "Call your PCP this week",
-        description: `Ask for a referral to a ${primarySpecialistLabel.toLowerCase()} and request an order for ${primaryLab}. Most offices can handle this over the phone or patient portal.`,
-        tag: "Start here", tagTone: "ok",
-        content: (
-          <div className="mt-2 p-4 rounded-xl bg-stone-50 border border-stone-200">
-            <SectionLabel>In-network PCPs near you</SectionLabel>
-            <div className="mt-3 space-y-2.5">
-              {pcps.slice(0, 2).map((d, i) => (
-                <div key={i} className="flex items-center justify-between text-[13px]">
-                  <div>
-                    <div className="font-semibold" style={{ color: "#1B2B4B" }}>{d.name}</div>
-                    <div style={{ color: "#5A6B8C" }}>{d.distance} mi · {d.address}</div>
-                  </div>
-                  <Badge tone={d.accepting ? "ok" : "error"}>{d.accepting ? "Accepting" : "Full"}</Badge>
-                </div>
-              ))}
-            </div>
-          </div>
-        ),
-      });
+  // Persist
+  const saveEntries = (next) => {
+    setEntries(next);
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+    } catch (err) {
+      /* ignore */
     }
-
-    steps.push({
-      title: `Book your ${primarySpecialistLabel.toLowerCase()} appointment`,
-      description: `Once your referral is in hand${effectiveReferralRule ? "" : " (no referral needed for your plan)"}, call one of these in-network providers. Your copay will be $${plan.specialistCopay}.`,
-      tag: `${plan.specialistCopay} copay`, tagTone: "ok",
-      content: (
-        <div className="mt-2 space-y-2.5">
-          {!isDefaultZip && (
-            <div className="text-[12px] italic mb-2" style={{ color: "#B37400" }}>
-              Showing sample providers — real directory coming soon for your ZIP.
-            </div>
-          )}
-          {specialists.map((d, i) => (
-            <div key={i} className="flex items-center justify-between p-3 rounded-lg border border-stone-200 bg-white">
-              <div className="flex-1 min-w-0">
-                <div className="font-semibold text-[14px]" style={{ color: "#1B2B4B" }}>{d.name}</div>
-                <div className="text-[12px] flex items-center gap-2 mt-0.5" style={{ color: "#5A6B8C" }}>
-                  <Icon path={icons.pin} size={11} />
-                  {d.distance} mi · {d.address}
-                </div>
-              </div>
-              <Badge tone={d.accepting ? "ok" : "error"}>{d.accepting ? "Accepting" : "Full"}</Badge>
-            </div>
-          ))}
-        </div>
-      ),
-    });
-
-    if (aiResult.typical_medications.length > 0) {
-      const medName = aiResult.typical_medications[0];
-      const sorted = [...PHARMACIES].sort((a, b) => a.price - b.price);
-      steps.push({
-        title: `Fill your ${medName} prescription`,
-        description: `Same drug, very different prices. Here's where it's cheapest near you.`,
-        tag: "Under $10/mo", tagTone: "ok",
-        content: (
-          <div className="mt-2 rounded-xl border border-stone-200 overflow-hidden">
-            <table className="w-full text-[13px]">
-              <thead style={{ backgroundColor: "#F1F5FA" }}>
-                <tr>
-                  <th className="text-left px-4 py-2.5 font-semibold" style={{ color: "#1B2B4B" }}>Pharmacy</th>
-                  <th className="text-right px-4 py-2.5 font-semibold" style={{ color: "#1B2B4B" }}>Price</th>
-                </tr>
-              </thead>
-              <tbody>
-                {sorted.map((p, i) => (
-                  <tr key={i} className="border-t border-stone-100">
-                    <td className="px-4 py-3">
-                      <div className="font-semibold" style={{ color: "#1B2B4B" }}>{p.name}</div>
-                      {p.note && <div className="text-[11.5px] mt-0.5" style={{ color: "#5A6B8C" }}>{p.note}</div>}
-                    </td>
-                    <td className="text-right px-4 py-3">
-                      <span className="font-semibold" style={{ color: p.price <= 4 ? "#059669" : "#1B2B4B" }}>${p.price}/mo</span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <div className="px-4 py-2.5 text-[11.5px] border-t border-stone-100" style={{ backgroundColor: "#FEF7E7", color: "#7A4A00" }}>
-              💡 GoodRx coupon brings CVS down to $4/month — ask at the counter or use the app.
-            </div>
-          </div>
-        ),
-      });
-    }
-
-    if (plan.nutritionist.covered) {
-      steps.push({
-        title: "Book your free nutritionist visits",
-        description: `Your plan covers ${plan.nutritionist.visits} registered-dietitian visits per year at no cost. For a new diagnosis this is one of the highest-value things you can do early.`,
-        tag: `${plan.nutritionist.visits} free visits`, tagTone: "ok", content: null,
-      });
-    } else {
-      steps.push({
-        title: "Nutrition guidance (self-pay options)",
-        description: `Your plan doesn't cover a nutritionist, but a single consult (~$100–150) can pay for itself. Look for registered dietitians in your area or evidence-based apps.`,
-        tag: "Not covered", tagTone: "warn", content: null,
-      });
-    }
-
-    return steps;
-  }, [aiResult, plan, effectiveReferralRule, primarySpecialistKey, primarySpecialistLabel, isDefaultZip]);
-
-  const roadmap = useMemo(() => {
-    if (!aiResult || !plan) return { thisWeek: [], next2Weeks: [], ongoing: [] };
-    const primaryLab = aiResult.required_labs[0] || "baseline labs";
-    const thisWeek = [], next2Weeks = [], ongoing = [];
-
-    if (effectiveReferralRule) {
-      thisWeek.push(`Call your PCP and request a referral to a ${primarySpecialistLabel.toLowerCase()}.`);
-      thisWeek.push(`Ask your PCP to order ${primaryLab}.`);
-    } else {
-      thisWeek.push(`Book a ${primarySpecialistLabel.toLowerCase()} appointment directly (no referral needed).`);
-    }
-    next2Weeks.push(`Attend your ${primarySpecialistLabel.toLowerCase()} appointment ($${plan.specialistCopay} copay).`);
-    next2Weeks.push(`Get your labs drawn: ${aiResult.required_labs.slice(0, 2).join(", ")}.`);
-    if (aiResult.typical_medications.length > 0) {
-      ongoing.push(`Fill ${aiResult.typical_medications[0]} monthly — HEB or Costco at $4 is your cheapest option.`);
-    }
-    if (plan.nutritionist.covered) {
-      ongoing.push(`Schedule nutritionist visits (${plan.nutritionist.visits} free visits remaining this year).`);
-    }
-    ongoing.push(`Follow-up: ${aiResult.visit_frequency}.`);
-    ongoing.push(aiResult.lifestyle_note);
-    return { thisWeek, next2Weeks, ongoing };
-  }, [aiResult, plan, effectiveReferralRule, primarySpecialistLabel]);
-
-  const analyzeAndNavigate = async (navigate) => {
-    setLoading(true);
-    navigate("picture");
-    const result = await callAnthropicAPI(concern.text, concern.status);
-    setAiResult(result);
-    setLoading(false);
   };
 
-  const reanalyze = async (navigate) => {
-    if (!concern.text.trim()) { navigate("concern"); return; }
-    setLoading(true);
-    const result = await callAnthropicAPI(concern.text, concern.status);
-    setAiResult(result);
-    setLoading(false);
+  // region tap
+  const handleRegionTap = (region) => {
+    setPulseRegion(region);
+    setTimeout(() => setPulseRegion(null), 650);
+    setTimeout(() => {
+      setSelectedRegion(region);
+      setSheetOpen(true);
+    }, 150);
   };
 
-  const reset = () => {
-    setActive("overview");
-    setProfile({ provider: "", planType: "", zip: "" });
-    setConcern({ text: "", status: "" });
-    setAiResult(null);
-    setChecks({});
+  const addEntry = (entry) => {
+    const newEntry = {
+      id: `e_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      ...entry,
+      timestamp: Date.now(),
+    };
+    const next = [newEntry, ...entries];
+    saveEntries(next);
+    showToast("logged ✓");
   };
 
-  const navigate = (id) => setActive(id);
+  const deleteEntry = (id) => {
+    saveEntries(entries.filter((e) => e.id !== id));
+  };
+
+  const showToast = (msg) => {
+    setToast(msg);
+    setTimeout(() => setToast(""), 2000);
+  };
 
   return (
-    <div className="min-h-screen flex" style={{ backgroundColor: "#FAFAF8", fontFamily: "'Inter', system-ui, -apple-system, sans-serif" }}>
-      <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Inter:wght@400;500;600;700&display=swap');
-        body { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
-        @keyframes fadein { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
-        .tab-enter { animation: fadein 0.3s ease-out; }
-        @keyframes slidein { from { transform: translateX(-100%); } to { transform: translateX(0); } }
-        .slide-in { animation: slidein 0.25s ease-out; }
-      `}</style>
-
-      {!isMobile && (
-        <div className="flex-shrink-0 sticky top-0 h-screen">
-          <Sidebar active={active} navigate={navigate} completion={completion} isMobile={false} />
-        </div>
-      )}
-
-      {isMobile && mobileNavOpen && (
-        <>
-          <div className="fixed inset-0 z-40" style={{ backgroundColor: "rgba(27,43,75,0.4)" }} onClick={() => setMobileNavOpen(false)} />
-          <div className="fixed inset-y-0 left-0 z-50 slide-in">
-            <Sidebar active={active} navigate={navigate} completion={completion}
-                     onClose={() => setMobileNavOpen(false)} isMobile={true} />
-          </div>
-        </>
-      )}
-
-      <main className="flex-1 min-w-0">
-        {isMobile && (
-          <div className="sticky top-0 z-30 flex items-center justify-between px-4 py-3 border-b border-stone-200"
-               style={{ backgroundColor: "#FAFAF8" }}>
-            <button onClick={() => setMobileNavOpen(true)} className="p-2 rounded-lg hover:bg-stone-100">
-              <Icon path={icons.menu} size={20} style={{ color: "#1B2B4B" }} />
-            </button>
-            <div className="flex items-center gap-2">
-              <div className="flex items-center justify-center w-7 h-7 rounded-lg" style={{ backgroundColor: "#0D9488" }}>
-                <Icon path={icons.shield} size={14} className="text-white" />
-              </div>
-              <span className="font-semibold text-[14px]" style={{ color: "#1B2B4B", fontFamily: "'Fraunces', Georgia, serif" }}>ClearCare</span>
+    <>
+      <style>{styles}</style>
+      <div className="cp-canvas">
+        <div className="cp-phone">
+          {/* Content */}
+          <div className="cp-content">
+            <div className={`cp-tab-panel ${tab === "log" ? "active" : ""}`}>
+              {tab === "log" && (
+                <LogTab
+                  entries={entries}
+                  bodyView={bodyView}
+                  setBodyView={setBodyView}
+                  onRegionTap={handleRegionTap}
+                  pulseRegion={pulseRegion}
+                  onEntryClick={setDetailEntry}
+                />
+              )}
             </div>
-            <div className="w-9" />
-          </div>
-        )}
-
-        <div className="px-5 py-6 md:px-10 md:py-10 max-w-5xl">
-          <div key={active} className="tab-enter">
-            {active === "overview" && (
-              <OverviewTab profile={profile} concern={concern} aiResult={aiResult} plan={plan}
-                           completion={completion} navigate={navigate} />
-            )}
-            {active === "profile" && (
-              <ProfileTab profile={profile} setProfile={setProfile} navigate={navigate} />
-            )}
-            {active === "concern" && (
-              <ConcernTab concern={concern} setConcern={setConcern}
-                          onAnalyze={analyzeAndNavigate} loading={loading} navigate={navigate} />
-            )}
-            {active === "picture" && (
-              <PictureTab aiResult={aiResult} loading={loading} navigate={navigate} onReanalyze={reanalyze} />
-            )}
-            {active === "coverage" && (
-              <CoverageTab plan={plan} aiResult={aiResult} effectiveReferralRule={effectiveReferralRule}
-                           navigate={navigate} completion={completion} />
-            )}
-            {active === "gps" && (
-              <GpsTab gpsSteps={gpsSteps} checks={checks} setChecks={setChecks}
-                      navigate={navigate} completion={completion} />
-            )}
-            {active === "roadmap" && (
-              <RoadmapTab roadmap={roadmap} plan={plan} aiResult={aiResult}
-                          navigate={navigate} reset={reset} completion={completion} />
-            )}
+            <div className={`cp-tab-panel ${tab === "history" ? "active" : ""}`}>
+              {tab === "history" && (
+                <HistoryTab entries={entries} onDelete={deleteEntry} onEntryClick={setDetailEntry} />
+              )}
+            </div>
+            <div className={`cp-tab-panel ${tab === "report" ? "active" : ""}`}>
+              {tab === "report" && (
+                <ReportTab
+                  entries={entries}
+                  reportTab={reportTab}
+                  setReportTab={setReportTab}
+                  showToast={showToast}
+                />
+              )}
+            </div>
           </div>
 
-          <div className="mt-12 pt-6 border-t border-stone-200">
-            <p className="text-[11.5px] text-center" style={{ color: "#8A95AB" }}>
-              ClearCare provides coverage guidance, not medical advice. Always confirm with your provider and insurance.
-            </p>
-          </div>
+          {/* Toast */}
+          {toast && <div className="cp-toast">{toast}</div>}
+
+          {/* Bottom sheet */}
+          <BottomSheet
+            open={sheetOpen}
+            onClose={() => setSheetOpen(false)}
+            region={selectedRegion}
+            onSave={(data) => {
+              addEntry({ region: selectedRegion, ...data });
+              setSheetOpen(false);
+            }}
+            customTriggers={customTriggers}
+            setCustomTriggers={setCustomTriggers}
+          />
+
+          {/* Detail view */}
+          {detailEntry && (
+            <DetailView entry={detailEntry} onClose={() => setDetailEntry(null)} onDelete={(id) => { deleteEntry(id); setDetailEntry(null); }} />
+          )}
+
+          {/* Bottom nav */}
+          <nav className="cp-nav">
+            <button
+              className={`cp-nav-btn ${tab === "log" ? "active" : ""}`}
+              onClick={() => setTab("log")}
+            >
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="9" />
+                <path d="M12 7v10M7 12h10" />
+              </svg>
+              <span>log</span>
+            </button>
+            <button
+              className={`cp-nav-btn ${tab === "history" ? "active" : ""}`}
+              onClick={() => setTab("history")}
+            >
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M3 12a9 9 0 1 0 3-6.7" />
+                <path d="M3 4v5h5" />
+                <path d="M12 8v4l3 2" />
+              </svg>
+              <span>history</span>
+            </button>
+            <button
+              className={`cp-nav-btn ${tab === "report" ? "active" : ""}`}
+              onClick={() => setTab("report")}
+            >
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="5" y="3" width="14" height="18" rx="2" />
+                <path d="M9 8h6M9 12h6M9 16h4" />
+              </svg>
+              <span>report</span>
+            </button>
+          </nav>
         </div>
-      </main>
+      </div>
+    </>
+  );
+}
+
+// ============================================================================
+// Log tab
+// ============================================================================
+
+function LogTab({ entries, bodyView, setBodyView, onRegionTap, pulseRegion, onEntryClick }) {
+  const recent = entries.slice(0, 2);
+  const today = new Date();
+  const dateStr = today.toLocaleDateString("en-US", {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+  }).toLowerCase();
+
+  return (
+    <div className="cp-log">
+      <div className="cp-log-header">
+        <div className="cp-greeting">{greeting()}</div>
+        <div className="cp-date">{dateStr}</div>
+      </div>
+
+      <div className="cp-body-toggle">
+        <button
+          className={`cp-toggle-btn ${bodyView === "front" ? "active" : ""}`}
+          onClick={() => setBodyView("front")}
+        >
+          front
+        </button>
+        <button
+          className={`cp-toggle-btn ${bodyView === "back" ? "active" : ""}`}
+          onClick={() => setBodyView("back")}
+        >
+          back
+        </button>
+      </div>
+
+      <div className="cp-body-wrap">
+        <div key={bodyView} className="cp-body-inner">
+          {bodyView === "front" ? (
+            <BodyFront onRegionTap={onRegionTap} pulseRegion={pulseRegion} />
+          ) : (
+            <BodyBack onRegionTap={onRegionTap} pulseRegion={pulseRegion} />
+          )}
+        </div>
+      </div>
+
+      <div className="cp-log-hint">tap anywhere on the body to log</div>
+
+      {recent.length > 0 && (
+        <div className="cp-recent">
+          <div className="cp-recent-label">recent</div>
+          {recent.map((e) => (
+            <button key={e.id} className="cp-recent-card" onClick={() => onEntryClick(e)}>
+              <span className="cp-recent-dot" style={{ background: intensityColor(e.intensity) }} />
+              <div className="cp-recent-meta">
+                <div className="cp-recent-region">{REGION_LABELS[e.region]}</div>
+                <div className="cp-recent-sub">
+                  {e.painType} · {e.intensity}/10
+                </div>
+              </div>
+              <div className="cp-recent-time">{timeAgo(e.timestamp)}</div>
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
+
+// ============================================================================
+// Bottom sheet (log form)
+// ============================================================================
+
+function BottomSheet({ open, onClose, region, onSave, customTriggers, setCustomTriggers }) {
+  const [painType, setPainType] = useState("aching");
+  const [intensity, setIntensity] = useState(5);
+  const [trigger, setTrigger] = useState("");
+  const [note, setNote] = useState("");
+  const [customOpen, setCustomOpen] = useState(false);
+  const [customText, setCustomText] = useState("");
+
+  useEffect(() => {
+    if (open) {
+      setPainType("aching");
+      setIntensity(5);
+      setTrigger("");
+      setNote("");
+      setCustomOpen(false);
+      setCustomText("");
+    }
+  }, [open]);
+
+  const allTriggers = [...DEFAULT_TRIGGERS, ...customTriggers];
+
+  const handleAddCustom = () => {
+    const t = customText.trim().toLowerCase();
+    if (t && !allTriggers.includes(t)) {
+      setCustomTriggers([...customTriggers, t]);
+      setTrigger(t);
+      setCustomOpen(false);
+      setCustomText("");
+    }
+  };
+
+  const handleSave = () => {
+    onSave({
+      painType,
+      intensity,
+      trigger: trigger || "no clear trigger",
+      note: note.trim(),
+    });
+  };
+
+  return (
+    <>
+      {open && <div className="cp-sheet-backdrop" onClick={onClose} />}
+      <div className={`cp-sheet ${open ? "open" : ""}`}>
+        <div className="cp-sheet-handle" onClick={onClose} />
+        <div className="cp-sheet-inner">
+          <div className="cp-sheet-region-pill">{region ? REGION_LABELS[region] : ""}</div>
+
+          <div className="cp-field">
+            <div className="cp-field-label">pain type</div>
+            <div className="cp-pills-scroll">
+              {PAIN_TYPES.map((t) => (
+                <button
+                  key={t}
+                  className={`cp-pill ${painType === t ? "active" : ""}`}
+                  onClick={() => setPainType(t)}
+                >
+                  {t}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="cp-field">
+            <div className="cp-field-label">intensity</div>
+            <div className="cp-intensity-num" style={{ color: intensityColor(intensity) }}>
+              {intensity}
+            </div>
+            <input
+              type="range"
+              min="1"
+              max="10"
+              value={intensity}
+              onChange={(e) => setIntensity(Number(e.target.value))}
+              className="cp-slider"
+              style={{ "--thumb-color": intensityColor(intensity) }}
+            />
+            <div className="cp-slider-labels">
+              <span>1</span>
+              <span>10</span>
+            </div>
+          </div>
+
+          <div className="cp-field">
+            <div className="cp-field-label">trigger</div>
+            <div className="cp-pills-wrap">
+              {allTriggers.map((t) => (
+                <button
+                  key={t}
+                  className={`cp-pill cp-pill-sm ${trigger === t ? "active" : ""}`}
+                  onClick={() => setTrigger(t)}
+                >
+                  {t}
+                </button>
+              ))}
+              {!customOpen ? (
+                <button
+                  className="cp-pill cp-pill-sm cp-pill-dashed"
+                  onClick={() => setCustomOpen(true)}
+                >
+                  + add your own
+                </button>
+              ) : (
+                <div className="cp-custom-input-wrap">
+                  <input
+                    autoFocus
+                    className="cp-custom-input"
+                    placeholder="e.g. lifting"
+                    value={customText}
+                    onChange={(e) => setCustomText(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && handleAddCustom()}
+                  />
+                  <button className="cp-custom-add" onClick={handleAddCustom}>add</button>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="cp-field">
+            <input
+              className="cp-note-input"
+              placeholder="optional note..."
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+            />
+          </div>
+
+          <button className="cp-save-btn" onClick={handleSave}>save entry</button>
+        </div>
+      </div>
+    </>
+  );
+}
+
+// ============================================================================
+// History tab
+// ============================================================================
+
+function HistoryTab({ entries, onDelete, onEntryClick }) {
+  const stats = useMemo(() => {
+    if (entries.length === 0) return { total: 0, topRegion: "—", avgIntensity: "—" };
+    const regionCount = {};
+    let sumIntensity = 0;
+    entries.forEach((e) => {
+      regionCount[e.region] = (regionCount[e.region] || 0) + 1;
+      sumIntensity += e.intensity;
+    });
+    const topRegion = Object.entries(regionCount).sort((a, b) => b[1] - a[1])[0][0];
+    return {
+      total: entries.length,
+      topRegion: REGION_LABELS[topRegion],
+      avgIntensity: (sumIntensity / entries.length).toFixed(1),
+    };
+  }, [entries]);
+
+  const grouped = useMemo(() => {
+    const groups = {};
+    entries.forEach((e) => {
+      const key = dateKey(e.timestamp);
+      if (!groups[key]) groups[key] = { label: dayHeader(e.timestamp), ts: e.timestamp, entries: [] };
+      groups[key].entries.push(e);
+    });
+    return Object.values(groups).sort((a, b) => b.ts - a.ts);
+  }, [entries]);
+
+  if (entries.length === 0) {
+    return (
+      <div className="cp-empty">
+        <CalmFigure />
+        <p>nothing logged yet — tap the log tab to start.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="cp-history">
+      <div className="cp-history-header">
+        <h2>history</h2>
+      </div>
+      <div className="cp-stats-row">
+        <div className="cp-stat">
+          <div className="cp-stat-label">total logs</div>
+          <div className="cp-stat-num">{stats.total}</div>
+        </div>
+        <div className="cp-stat">
+          <div className="cp-stat-label">top region</div>
+          <div className="cp-stat-num cp-stat-small">{stats.topRegion}</div>
+        </div>
+        <div className="cp-stat">
+          <div className="cp-stat-label">avg</div>
+          <div className="cp-stat-num">{stats.avgIntensity}</div>
+        </div>
+      </div>
+
+      {grouped.map((group) => (
+        <div key={group.label + group.ts} className="cp-group">
+          <div className="cp-group-header">{group.label}</div>
+          {group.entries.map((e) => (
+            <div key={e.id} className="cp-entry-card" onClick={() => onEntryClick(e)}>
+              <span className="cp-entry-dot" style={{ background: intensityColor(e.intensity) }} />
+              <div className="cp-entry-meta">
+                <div className="cp-entry-region">{REGION_LABELS[e.region]}</div>
+                <div className="cp-entry-sub">
+                  {e.painType} · {e.trigger}
+                </div>
+              </div>
+              <div className="cp-entry-num">{e.intensity}</div>
+              <button
+                className="cp-entry-del"
+                onClick={(ev) => {
+                  ev.stopPropagation();
+                  onDelete(e.id);
+                }}
+                aria-label="delete"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+                  <path d="M5 7h14M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3" />
+                </svg>
+              </button>
+            </div>
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ============================================================================
+// Detail view
+// ============================================================================
+
+function DetailView({ entry, onClose, onDelete }) {
+  return (
+    <div className="cp-detail-overlay" onClick={onClose}>
+      <div className="cp-detail-card" onClick={(e) => e.stopPropagation()}>
+        <button className="cp-detail-close" onClick={onClose}>✕</button>
+        <div className="cp-detail-region">{REGION_LABELS[entry.region]}</div>
+        <div className="cp-detail-intensity" style={{ color: intensityColor(entry.intensity) }}>
+          {entry.intensity}<span className="cp-detail-denom">/10</span>
+        </div>
+        <div className="cp-detail-rows">
+          <div className="cp-detail-row"><span>pain type</span><span>{entry.painType}</span></div>
+          <div className="cp-detail-row"><span>trigger</span><span>{entry.trigger}</span></div>
+          <div className="cp-detail-row"><span>logged</span><span>{new Date(entry.timestamp).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).toLowerCase()}</span></div>
+          {entry.note && <div className="cp-detail-row"><span>note</span><span>{entry.note}</span></div>}
+        </div>
+        <button className="cp-detail-del" onClick={() => onDelete(entry.id)}>delete entry</button>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================================
+// Report tab
+// ============================================================================
+
+function ReportTab({ entries, reportTab, setReportTab, showToast }) {
+  return (
+    <div className="cp-report">
+      <div className="cp-report-header">
+        <h2>report</h2>
+      </div>
+      <div className="cp-report-tabs">
+        <button
+          className={`cp-rtab ${reportTab === "summary" ? "active" : ""}`}
+          onClick={() => setReportTab("summary")}
+        >
+          summary
+        </button>
+        <button
+          className={`cp-rtab ${reportTab === "questions" ? "active" : ""}`}
+          onClick={() => setReportTab("questions")}
+        >
+          questions
+        </button>
+      </div>
+
+      {reportTab === "summary" ? (
+        <SummarySection entries={entries} />
+      ) : (
+        <QuestionsSection entries={entries} showToast={showToast} />
+      )}
+    </div>
+  );
+}
+
+function computeStats(entries) {
+  if (entries.length === 0) return null;
+  const sorted = [...entries].sort((a, b) => a.timestamp - b.timestamp);
+  const start = sorted[0].timestamp;
+  const end = sorted[sorted.length - 1].timestamp;
+
+  const regionCount = {};
+  const typeCount = {};
+  const triggerCount = {};
+  let sumI = 0;
+  let maxI = 0;
+  let maxEntry = sorted[0];
+
+  sorted.forEach((e) => {
+    regionCount[e.region] = (regionCount[e.region] || 0) + 1;
+    typeCount[e.painType] = (typeCount[e.painType] || 0) + 1;
+    triggerCount[e.trigger] = (triggerCount[e.trigger] || 0) + 1;
+    sumI += e.intensity;
+    if (e.intensity > maxI) {
+      maxI = e.intensity;
+      maxEntry = e;
+    }
+  });
+
+  const topEntry = (obj) => Object.entries(obj).sort((a, b) => b[1] - a[1])[0];
+  const topRegion = topEntry(regionCount);
+  const topType = topEntry(typeCount);
+  const topTrigger = topEntry(triggerCount);
+
+  const spanDays = Math.ceil((end - start) / (24 * 60 * 60 * 1000));
+  const regions = Object.keys(regionCount);
+
+  // Trend: compare first 3 days avg vs last 3 days avg (per spec)
+  let trend = "none";
+  if (spanDays >= 7) {
+    const DAY = 24 * 60 * 60 * 1000;
+    const lastCutoff = end - 3 * DAY;
+    const firstCutoff = start + 3 * DAY;
+    const lastEntries = sorted.filter((e) => e.timestamp >= lastCutoff);
+    const firstEntries = sorted.filter((e) => e.timestamp <= firstCutoff);
+    if (lastEntries.length > 0 && firstEntries.length > 0) {
+      const lastAvg = lastEntries.reduce((s, e) => s + e.intensity, 0) / lastEntries.length;
+      const firstAvg = firstEntries.reduce((s, e) => s + e.intensity, 0) / firstEntries.length;
+      if (lastAvg > firstAvg) trend = "up";
+      else if (lastAvg < firstAvg) trend = "down";
+    }
+  }
+
+  return {
+    total: entries.length,
+    start,
+    end,
+    spanDays,
+    regionCount,
+    regions,
+    topRegion,
+    topType,
+    topTrigger,
+    avgIntensity: sumI / entries.length,
+    maxIntensity: maxI,
+    maxEntry,
+    trend,
+  };
+}
+
+function SummarySection({ entries }) {
+  const s = useMemo(() => computeStats(entries), [entries]);
+
+  const handlePrint = () => {
+    window.print();
+  };
+
+  if (!s) {
+    return <div className="cp-summary-empty">no data to summarize yet.</div>;
+  }
+
+  const facts = [];
+  facts.push(`Pain was logged ${s.total} times between ${formatDateLong(s.start)} and ${formatDateLong(s.end)}.`);
+  facts.push(`The most frequently reported location was ${REGION_LABELS[s.topRegion[0]]} (${s.topRegion[1]} entries).`);
+  facts.push(`Reported locations included: ${s.regions.map((r) => REGION_LABELS[r]).join(", ")}.`);
+  facts.push(`The most common pain type was ${s.topType[0]}, reported ${s.topType[1]} times.`);
+  facts.push(`The most frequently noted trigger was ${s.topTrigger[0]} (${s.topTrigger[1]} entries).`);
+  facts.push(`Average reported intensity was ${s.avgIntensity.toFixed(1)} out of 10.`);
+  facts.push(`Highest intensity recorded: ${s.maxIntensity}/10 on ${formatDateLong(s.maxEntry.timestamp)} in ${REGION_LABELS[s.maxEntry.region]}.`);
+  if (s.regions.length > 1) {
+    facts.push(`Pain was recorded across ${s.regions.length} distinct body regions.`);
+  }
+  if (s.trend === "up") {
+    facts.push(`Reported intensity has increased over the tracked period.`);
+  } else if (s.trend === "down") {
+    facts.push(`Reported intensity has decreased over the tracked period.`);
+  }
+
+  return (
+    <div className="cp-summary" id="cp-print-area">
+      <div className="cp-summary-card">
+        <div className="cp-summary-title">Pain Log Summary</div>
+        <div className="cp-summary-meta">
+          {formatDateShort(s.start)} – {formatDateShort(s.end)} · {s.total} entries
+        </div>
+        <div className="cp-summary-divider" />
+        <ul className="cp-summary-list">
+          {facts.map((f, i) => (
+            <li key={i}>{f}</li>
+          ))}
+        </ul>
+
+        <div className="cp-heatmap-wrap">
+          <div className="cp-heatmap-label">reported regions</div>
+          <div className="cp-heatmap-body">
+            <BodyFront heatmap={s.regionCount} />
+          </div>
+        </div>
+      </div>
+
+      <button className="cp-print-btn" onClick={handlePrint}>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M6 9V3h12v6M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" />
+          <rect x="6" y="14" width="12" height="8" />
+        </svg>
+        print / save as pdf
+      </button>
+    </div>
+  );
+}
+
+function QuestionsSection({ entries, showToast }) {
+  const s = useMemo(() => computeStats(entries), [entries]);
+
+  if (!s) {
+    return <div className="cp-summary-empty">log a few entries to see suggested questions.</div>;
+  }
+
+  const questions = [];
+  questions.push(`What could be causing pain in my ${REGION_LABELS[s.topRegion[0]]}?`);
+  questions.push(`Is there anything I should avoid doing when the pain is at its worst?`);
+
+  if (s.avgIntensity > 6) {
+    questions.push(`My pain has been averaging ${s.avgIntensity.toFixed(1)}/10 — is that level something we should treat more aggressively?`);
+  }
+  if (s.trend === "up") {
+    questions.push(`My pain seems to be getting more intense over time — what does that suggest?`);
+  }
+  if (s.regions.length >= 2) {
+    const [a, b] = s.regions;
+    questions.push(`I've been noticing pain in multiple areas — ${REGION_LABELS[a]} and ${REGION_LABELS[b]} — could these be connected?`);
+  }
+  if (s.topTrigger[0] === "waking up") {
+    questions.push(`My pain is often worst when I wake up — could that be related to how I'm sleeping or something inflammatory?`);
+  }
+  if (s.topTrigger[0] === "stress" || Object.keys(s.regionCount).some((r) => r === "stress")) {
+    // check if stress appears in trigger list
+  }
+  // separate stress check via trigger data
+  const stressCount = entries.filter((e) => e.trigger === "stress").length;
+  if (stressCount >= 2 && !questions.some((q) => q.includes("stress"))) {
+    questions.push(`I've noticed pain correlates with stress — are there approaches that address both?`);
+  }
+
+  questions.push(`Based on this log, what would you recommend as a next step?`);
+
+  // Cap at 7
+  const final = questions.slice(0, 7);
+
+  const copyAll = async () => {
+    const text = final.map((q, i) => `${i + 1}. ${q}`).join("\n");
+    try {
+      await navigator.clipboard.writeText(text);
+      showToast("copied ✓");
+    } catch {
+      showToast("copy failed");
+    }
+  };
+
+  return (
+    <div className="cp-questions">
+      <div className="cp-questions-header">
+        <h3>questions to ask your doctor</h3>
+        <p>based on what you've logged, here are things worth bringing up.</p>
+      </div>
+      <div className="cp-questions-list">
+        {final.map((q, i) => (
+          <div key={i} className="cp-question-card">
+            <div className="cp-quote-icon">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6">
+                <path d="M7 7h3v3c0 2-1 3-3 4M14 7h3v3c0 2-1 3-3 4" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </div>
+            <div className="cp-question-text">{q}</div>
+          </div>
+        ))}
+      </div>
+      <button className="cp-copy-btn" onClick={copyAll}>copy all questions</button>
+    </div>
+  );
+}
+
+// ============================================================================
+// Styles
+// ============================================================================
+
+const styles = `
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500&family=Playfair+Display:wght@400;500&display=swap');
+
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+.cp-canvas {
+  min-height: 100vh;
+  background: #F0EDE8;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  font-family: 'DM Sans', system-ui, sans-serif;
+  color: #2C2C2C;
+  letter-spacing: -0.01em;
+}
+
+.cp-phone {
+  width: 100%;
+  max-width: 390px;
+  height: min(844px, calc(100vh - 40px));
+  background: #FFFFFF;
+  border-radius: 44px;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.08), 0 0 0 1px rgba(0,0,0,0.03);
+  overflow: hidden;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+
+.cp-content {
+  flex: 1;
+  overflow: hidden;
+  position: relative;
+}
+
+.cp-tab-panel {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(6px);
+  transition: opacity 200ms ease, transform 200ms ease;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-bottom: 80px;
+}
+.cp-tab-panel.active {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+.cp-tab-panel::-webkit-scrollbar { width: 0; }
+
+/* ============ LOG TAB ============ */
+.cp-log {
+  padding: 32px 24px 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+}
+.cp-log-header {
+  text-align: center;
+  margin-bottom: 14px;
+}
+.cp-greeting {
+  color: #8A8A8A;
+  font-size: 15px;
+  font-weight: 400;
+}
+.cp-date {
+  color: #B5B5B5;
+  font-size: 12px;
+  margin-top: 2px;
+}
+
+.cp-body-toggle {
+  display: inline-flex;
+  margin: 0 auto 12px;
+  background: #F5F2ED;
+  border-radius: 999px;
+  padding: 3px;
+}
+.cp-toggle-btn {
+  border: none;
+  background: transparent;
+  padding: 6px 18px;
+  font-size: 13px;
+  font-family: inherit;
+  color: #8A8A8A;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: all 200ms ease;
+}
+.cp-toggle-btn.active {
+  background: #FFFFFF;
+  color: #2C2C2C;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+}
+
+.cp-body-wrap {
+  flex: 1;
+  min-height: 300px;
+  max-height: 48vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 12px;
+  overflow: hidden;
+}
+.cp-body-inner {
+  height: 100%;
+  width: auto;
+  aspect-ratio: 200 / 500;
+  max-width: 180px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: body-fade 260ms ease;
+}
+@keyframes body-fade {
+  from { opacity: 0; transform: scale(0.98); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.cp-log-hint {
+  text-align: center;
+  color: #B5B5B5;
+  font-size: 12px;
+  margin: 8px 0 12px;
+}
+
+.cp-recent {
+  margin-top: auto;
+  padding-top: 8px;
+}
+.cp-recent-label {
+  color: #B5B5B5;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  margin-bottom: 6px;
+  padding-left: 2px;
+}
+.cp-recent-card {
+  width: 100%;
+  background: #FAFAF8;
+  border-radius: 18px;
+  border: none;
+  box-shadow: 0 1px 8px rgba(0,0,0,0.05);
+  padding: 10px 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 6px;
+  cursor: pointer;
+  font-family: inherit;
+  text-align: left;
+  transition: transform 120ms ease;
+}
+.cp-recent-card:active { transform: scale(0.98); }
+.cp-recent-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.cp-recent-meta { flex: 1; min-width: 0; }
+.cp-recent-region {
+  font-size: 13px;
+  font-weight: 500;
+  color: #2C2C2C;
+}
+.cp-recent-sub {
+  font-size: 11px;
+  color: #8A8A8A;
+  margin-top: 1px;
+}
+.cp-recent-time {
+  font-size: 11px;
+  color: #B5B5B5;
+}
+
+/* ============ PULSE RING ============ */
+@keyframes cp-pulse {
+  0% { transform: scale(0.6); opacity: 0.9; }
+  100% { transform: scale(3.2); opacity: 0; }
+}
+@keyframes cp-pulse-fill {
+  0% { transform: scale(0.4); opacity: 0.6; }
+  100% { transform: scale(2.2); opacity: 0; }
+}
+
+/* ============ BOTTOM SHEET ============ */
+.cp-sheet-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0,0,0,0.15);
+  z-index: 20;
+  animation: fade-in 200ms ease;
+}
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+
+.cp-sheet {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: #FFFFFF;
+  border-radius: 24px 24px 0 0;
+  z-index: 25;
+  transform: translateY(100%);
+  transition: transform 300ms cubic-bezier(0.32, 0.72, 0, 1);
+  box-shadow: 0 -10px 40px rgba(0,0,0,0.1);
+  max-height: 82%;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.cp-sheet.open { transform: translateY(0); }
+.cp-sheet-handle {
+  width: 36px;
+  height: 4px;
+  border-radius: 2px;
+  background: #E0DDD5;
+  margin: 10px auto 4px;
+  cursor: pointer;
+}
+.cp-sheet-inner {
+  padding: 8px 20px 24px;
+}
+.cp-sheet-region-pill {
+  display: inline-block;
+  background: #F5F2ED;
+  color: #6B6B6B;
+  padding: 5px 14px;
+  border-radius: 999px;
+  font-size: 12px;
+  margin: 4px auto 16px;
+  position: relative;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.cp-field { margin-bottom: 18px; }
+.cp-field-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: #B5B5B5;
+  margin-bottom: 8px;
+}
+
+/* pills - horizontal scroll for pain type */
+.cp-pills-scroll {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.cp-pills-scroll::-webkit-scrollbar { display: none; }
+
+.cp-pills-wrap {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.cp-pill {
+  flex-shrink: 0;
+  background: #FAFAF8;
+  border: 1px solid #EEEAE2;
+  border-radius: 999px;
+  padding: 7px 14px;
+  font-size: 13px;
+  color: #6B6B6B;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 180ms ease;
+}
+.cp-pill.active {
+  background: #7BAE8F;
+  border-color: #7BAE8F;
+  color: #FFFFFF;
+}
+.cp-pill-sm { padding: 5px 12px; font-size: 12px; }
+.cp-pill-dashed {
+  border-style: dashed;
+  border-color: #D4D0C8;
+  color: #8A8A8A;
+}
+
+.cp-custom-input-wrap {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+.cp-custom-input {
+  border: 1px solid #D4D0C8;
+  border-radius: 999px;
+  padding: 5px 12px;
+  font-size: 12px;
+  outline: none;
+  font-family: inherit;
+  width: 110px;
+}
+.cp-custom-input:focus { border-color: #7BAE8F; }
+.cp-custom-add {
+  background: #7BAE8F;
+  color: white;
+  border: none;
+  border-radius: 999px;
+  padding: 5px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+/* intensity */
+.cp-intensity-num {
+  text-align: center;
+  font-size: 32px;
+  font-weight: 500;
+  line-height: 1;
+  margin: 4px 0 12px;
+  transition: color 180ms ease;
+}
+.cp-slider {
+  width: 100%;
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  border-radius: 2px;
+  background: #EEEAE2;
+  outline: none;
+}
+.cp-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--thumb-color, #7BAE8F);
+  cursor: pointer;
+  border: 3px solid #FFFFFF;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+  transition: background 180ms ease;
+}
+.cp-slider::-moz-range-thumb {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--thumb-color, #7BAE8F);
+  cursor: pointer;
+  border: 3px solid #FFFFFF;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+}
+.cp-slider-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: #B5B5B5;
+  margin-top: 4px;
+  padding: 0 2px;
+}
+
+.cp-note-input {
+  width: 100%;
+  border: none;
+  border-bottom: 1px solid #EEEAE2;
+  padding: 8px 2px;
+  font-size: 14px;
+  font-family: inherit;
+  outline: none;
+  background: transparent;
+  color: #2C2C2C;
+}
+.cp-note-input::placeholder { color: #B5B5B5; }
+.cp-note-input:focus { border-bottom-color: #7BAE8F; }
+
+.cp-save-btn {
+  width: 100%;
+  height: 48px;
+  background: #7BAE8F;
+  color: #FFFFFF;
+  border: none;
+  border-radius: 999px;
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 500;
+  cursor: pointer;
+  margin-top: 8px;
+  transition: background 180ms ease, transform 120ms ease;
+}
+.cp-save-btn:hover { background: #6A9E80; }
+.cp-save-btn:active { transform: scale(0.98); }
+
+/* ============ TOAST ============ */
+.cp-toast {
+  position: absolute;
+  top: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #2C2C2C;
+  color: #FFFFFF;
+  padding: 10px 20px;
+  border-radius: 999px;
+  font-size: 13px;
+  z-index: 50;
+  animation: toast-in 300ms ease, toast-out 300ms ease 1.7s forwards;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+}
+@keyframes toast-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(-12px); }
+  to { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+@keyframes toast-out {
+  to { opacity: 0; transform: translateX(-50%) translateY(-12px); }
+}
+
+/* ============ NAV ============ */
+.cp-nav {
+  display: flex;
+  justify-content: space-around;
+  align-items: center;
+  height: 72px;
+  background: #FFFFFF;
+  border-top: 1px solid #F0EDE8;
+  padding-bottom: 8px;
+}
+.cp-nav-btn {
+  background: transparent;
+  border: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  color: #B5B5B5;
+  font-size: 11px;
+  font-family: inherit;
+  cursor: pointer;
+  padding: 6px 16px;
+  transition: color 200ms ease;
+  min-height: 44px;
+}
+.cp-nav-btn.active { color: #7BAE8F; }
+
+/* ============ HISTORY ============ */
+.cp-history { padding: 28px 20px 0; }
+.cp-history-header h2 {
+  font-size: 22px;
+  font-weight: 500;
+  margin: 0 0 14px;
+}
+
+.cp-stats-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+.cp-stat {
+  background: #FAFAF8;
+  border-radius: 18px;
+  padding: 12px 10px;
+  text-align: center;
+  box-shadow: 0 1px 8px rgba(0,0,0,0.04);
+}
+.cp-stat-label {
+  font-size: 10px;
+  color: #B5B5B5;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 4px;
+}
+.cp-stat-num {
+  font-size: 20px;
+  font-weight: 500;
+  color: #2C2C2C;
+}
+.cp-stat-small { font-size: 13px; }
+
+.cp-group { margin-bottom: 18px; }
+.cp-group-header {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: #B5B5B5;
+  margin-bottom: 8px;
+  padding-left: 4px;
+}
+
+.cp-entry-card {
+  background: #FAFAF8;
+  border-radius: 18px;
+  padding: 12px 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 6px;
+  box-shadow: 0 1px 8px rgba(0,0,0,0.04);
+  cursor: pointer;
+  transition: transform 120ms ease;
+}
+.cp-entry-card:active { transform: scale(0.99); }
+.cp-entry-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.cp-entry-meta { flex: 1; min-width: 0; }
+.cp-entry-region { font-size: 14px; font-weight: 500; }
+.cp-entry-sub { font-size: 11px; color: #8A8A8A; margin-top: 1px; }
+.cp-entry-num {
+  font-size: 16px;
+  font-weight: 500;
+  color: #2C2C2C;
+  margin-right: 4px;
+}
+.cp-entry-del {
+  background: transparent;
+  border: none;
+  color: #C5C5C5;
+  cursor: pointer;
+  padding: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  transition: color 150ms ease, background 150ms ease;
+}
+.cp-entry-del:hover { color: #E8735A; background: rgba(232, 115, 90, 0.08); }
+
+.cp-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 100%;
+  text-align: center;
+  padding: 60px 30px;
+  color: #8A8A8A;
+  font-size: 14px;
+}
+.cp-empty p { margin-top: 16px; max-width: 220px; line-height: 1.5; }
+
+/* ============ REPORT ============ */
+.cp-report { padding: 28px 20px 0; }
+.cp-report-header h2 {
+  font-size: 22px;
+  font-weight: 500;
+  margin: 0 0 14px;
+}
+.cp-report-tabs {
+  display: inline-flex;
+  background: #F5F2ED;
+  padding: 3px;
+  border-radius: 999px;
+  margin-bottom: 18px;
+}
+.cp-rtab {
+  background: transparent;
+  border: none;
+  padding: 7px 18px;
+  font-size: 13px;
+  color: #8A8A8A;
+  border-radius: 999px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 200ms ease;
+}
+.cp-rtab.active {
+  background: #FFFFFF;
+  color: #2C2C2C;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+}
+
+.cp-summary-empty {
+  text-align: center;
+  color: #8A8A8A;
+  padding: 40px 20px;
+  font-size: 14px;
+}
+
+.cp-summary-card {
+  background: #FAFAF8;
+  border-radius: 18px;
+  padding: 22px 20px;
+  box-shadow: 0 1px 8px rgba(0,0,0,0.05);
+}
+.cp-summary-title {
+  font-family: 'Playfair Display', serif;
+  font-size: 20px;
+  font-weight: 400;
+  color: #2C2C2C;
+  margin-bottom: 4px;
+}
+.cp-summary-meta {
+  font-size: 11px;
+  color: #B5B5B5;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.cp-summary-divider {
+  height: 1px;
+  background: #EEEAE2;
+  margin: 16px 0;
+}
+.cp-summary-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.cp-summary-list li {
+  font-size: 13px;
+  line-height: 1.55;
+  color: #3C3C3C;
+  padding: 8px 0 8px 14px;
+  position: relative;
+  border-bottom: 1px solid rgba(238,234,226,0.6);
+}
+.cp-summary-list li:last-child { border-bottom: none; }
+.cp-summary-list li::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 17px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: #D4D0C8;
+}
+
+.cp-heatmap-wrap {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid #EEEAE2;
+}
+.cp-heatmap-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: #B5B5B5;
+  text-align: center;
+  margin-bottom: 8px;
+}
+.cp-heatmap-body {
+  height: 280px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+.cp-heatmap-body > svg { max-height: 100%; width: auto; }
+
+.cp-print-btn {
+  width: 100%;
+  margin-top: 14px;
+  background: #FFFFFF;
+  border: 1px solid #EEEAE2;
+  border-radius: 999px;
+  padding: 12px;
+  font-family: inherit;
+  font-size: 13px;
+  color: #6B6B6B;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: all 180ms ease;
+}
+.cp-print-btn:hover {
+  border-color: #7BAE8F;
+  color: #7BAE8F;
+}
+
+/* ============ QUESTIONS ============ */
+.cp-questions-header h3 {
+  font-size: 16px;
+  font-weight: 500;
+  margin: 0 0 4px;
+  color: #2C2C2C;
+}
+.cp-questions-header p {
+  color: #8A8A8A;
+  font-size: 12px;
+  margin: 0 0 16px;
+  line-height: 1.5;
+}
+.cp-questions-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.cp-question-card {
+  background: #FAFAF8;
+  border-radius: 18px;
+  padding: 14px 16px;
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  box-shadow: 0 1px 8px rgba(0,0,0,0.04);
+}
+.cp-quote-icon {
+  color: #7BAE8F;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.cp-question-text {
+  font-size: 13px;
+  line-height: 1.5;
+  color: #3C3C3C;
+}
+
+.cp-copy-btn {
+  width: 100%;
+  background: #FFFFFF;
+  border: 1px solid #EEEAE2;
+  border-radius: 999px;
+  padding: 12px;
+  font-family: inherit;
+  font-size: 13px;
+  color: #6B6B6B;
+  cursor: pointer;
+  transition: all 180ms ease;
+}
+.cp-copy-btn:hover {
+  border-color: #7BAE8F;
+  color: #7BAE8F;
+}
+
+/* ============ DETAIL ============ */
+.cp-detail-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(44,44,44,0.3);
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  animation: fade-in 200ms ease;
+}
+.cp-detail-card {
+  background: #FFFFFF;
+  border-radius: 22px;
+  padding: 24px 22px;
+  width: 100%;
+  max-width: 320px;
+  position: relative;
+  box-shadow: 0 20px 50px rgba(0,0,0,0.15);
+  animation: detail-in 260ms ease;
+}
+@keyframes detail-in {
+  from { opacity: 0; transform: scale(0.95); }
+  to { opacity: 1; transform: scale(1); }
+}
+.cp-detail-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  background: transparent;
+  border: none;
+  color: #B5B5B5;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  cursor: pointer;
+  font-size: 14px;
+}
+.cp-detail-close:hover { background: #F5F2ED; }
+.cp-detail-region {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: #8A8A8A;
+  margin-bottom: 4px;
+}
+.cp-detail-intensity {
+  font-size: 44px;
+  font-weight: 500;
+  line-height: 1;
+  margin-bottom: 16px;
+}
+.cp-detail-denom {
+  font-size: 18px;
+  color: #B5B5B5;
+  margin-left: 2px;
+}
+.cp-detail-rows { margin-bottom: 18px; }
+.cp-detail-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 9px 0;
+  border-bottom: 1px solid #F5F2ED;
+  font-size: 13px;
+}
+.cp-detail-row:last-child { border-bottom: none; }
+.cp-detail-row span:first-child { color: #8A8A8A; }
+.cp-detail-row span:last-child { color: #2C2C2C; text-align: right; max-width: 60%; }
+.cp-detail-del {
+  width: 100%;
+  background: transparent;
+  border: 1px solid #EEEAE2;
+  border-radius: 999px;
+  padding: 10px;
+  color: #E8735A;
+  font-family: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 150ms ease;
+}
+.cp-detail-del:hover {
+  background: rgba(232,115,90,0.06);
+  border-color: #E8735A;
+}
+
+/* ============ PRINT ============ */
+@media print {
+  body * { visibility: hidden; }
+  #cp-print-area, #cp-print-area * { visibility: visible; }
+  #cp-print-area {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    padding: 40px;
+  }
+  .cp-summary-card {
+    background: transparent;
+    box-shadow: none;
+    border: none;
+    padding: 0;
+  }
+  .cp-print-btn { display: none !important; }
+}
+`;
